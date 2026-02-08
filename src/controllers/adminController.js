@@ -3,6 +3,7 @@ const Wallet = require('../models/Wallet');
 const Loan = require('../models/Loan');
 const Transaction = require('../models/Transaction');
 const Withdrawal = require('../models/Withdrawal');
+const Profile = require('../models/Profile');
 const { successResponse, errorResponse } = require('../utils/helpers');
 
 // @desc    Dashboard статистик
@@ -180,6 +181,181 @@ exports.getUserDetails = async (req, res, next) => {
       loans,
       transactions
     });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ✅ ШИНЭ: Баталгаажуулалт хүлээгдэж буй profile-үүд
+// @route   GET /api/admin/profiles/pending
+// @access  Private/Admin
+exports.getPendingProfiles = async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const total = await Profile.countDocuments({ isVerified: false });
+    const profiles = await Profile.find({ isVerified: false })
+      .populate('user', 'firstName lastName phone email')
+      .sort('-createdAt')
+      .skip(skip)
+      .limit(limit);
+
+    successResponse(res, 200, 'Баталгаажуулалт хүлээгдэж буй profile-үүд', {
+      profiles,
+      pagination: {
+        total,
+        page,
+        pages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ✅ ШИНЭ: Profile дэлгэрэнгүй + зургууд
+// @route   GET /api/admin/profiles/:id
+// @access  Private/Admin
+exports.getProfileDetails = async (req, res, next) => {
+  try {
+    const profile = await Profile.findById(req.params.id)
+      .populate('user', 'firstName lastName phone email');
+
+    if (!profile) {
+      return errorResponse(res, 404, 'Profile олдсонгүй');
+    }
+
+    successResponse(res, 200, 'Profile дэлгэрэнгүй', { profile });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ✅ ШИНЭ: Profile баталгаажуулах + зээлийн эрх өгөх
+// @route   PUT /api/admin/profiles/:id/verify
+// @access  Private/Admin
+exports.verifyProfile = async (req, res, next) => {
+  try {
+    const { loanLimit } = req.body; // Зээлийн эрхийн дүн
+
+    if (!loanLimit || loanLimit < 0) {
+      return errorResponse(res, 400, 'Зээлийн эрхийн дүнгээ оруулна уу');
+    }
+
+    const profile = await Profile.findById(req.params.id);
+
+    if (!profile) {
+      return errorResponse(res, 404, 'Profile олдсонгүй');
+    }
+
+    profile.isVerified = true;
+    profile.verifiedAt = new Date();
+    profile.verifiedBy = req.user.id;
+    profile.availableLoanLimit = loanLimit; // ✅ Зээлийн эрх өгөх
+    await profile.save();
+
+    successResponse(res, 200, 'Profile амжилттай баталгаажлаа', { profile });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ✅ ШИНЭ: Profile татгалзах
+// @route   PUT /api/admin/profiles/:id/reject
+// @access  Private/Admin
+exports.rejectProfile = async (req, res, next) => {
+  try {
+    const { reason } = req.body;
+
+    const profile = await Profile.findByIdAndDelete(req.params.id);
+
+    if (!profile) {
+      return errorResponse(res, 404, 'Profile олдсонгүй');
+    }
+
+    // TODO: User-т мэдэгдэл илгээх
+
+    successResponse(res, 200, 'Profile татгалзагдлаа');
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ✅ ШИНЭ: Зээлийн мэдээлэл шалгуулах хүсэлтүүд (3000₮ төлсөн)
+// @route   GET /api/admin/loans/pending-verification
+// @access  Private/Admin
+exports.getPendingVerificationLoans = async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const total = await Loan.countDocuments({ status: 'pending_verification' });
+    const loans = await Loan.find({ status: 'pending_verification' })
+      .populate('user', 'firstName lastName phone email')
+      .sort('-createdAt')
+      .skip(skip)
+      .limit(limit);
+
+    successResponse(res, 200, 'Зээлийн мэдээлэл шалгуулах хүсэлтүүд', {
+      loans,
+      pagination: {
+        total,
+        page,
+        pages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ✅ ШИНЭ: Зээлийг "under_review" төлөвт шилжүүлэх
+// @route   PUT /api/admin/loans/:id/start-review
+// @access  Private/Admin
+exports.startLoanReview = async (req, res, next) => {
+  try {
+    const loan = await Loan.findById(req.params.id);
+
+    if (!loan) {
+      return errorResponse(res, 404, 'Зээл олдсонгүй');
+    }
+
+    if (loan.status !== 'pending_verification') {
+      return errorResponse(res, 400, 'Зөвхөн "pending_verification" төлөвтэй зээлийг шалгаж эхэлж болно');
+    }
+
+    loan.status = 'under_review';
+    await loan.save();
+
+    successResponse(res, 200, 'Зээлийн шалгалт эхэллээ', { loan });
+
+  } catch (error) {
+    next(error);
+  }
+};
+// Backend: src/controllers/adminController.js-д нэмэх
+
+// @desc    Хэрэглэгчийн хэтэвчний мэдээлэл авах
+// @route   GET /api/admin/users/:id/wallet
+// @access  Private/Admin
+exports.getUserWallet = async (req, res, next) => {
+  try {
+    const wallet = await Wallet.findOne({ user: req.params.id });
+
+    if (!wallet) {
+      return errorResponse(res, 404, 'Хэтэвч олдсонгүй');
+    }
+
+    successResponse(res, 200, 'Хэтэвчний мэдээлэл', { wallet });
 
   } catch (error) {
     next(error);

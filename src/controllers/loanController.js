@@ -222,6 +222,8 @@ exports.getLoanDetails = async (req, res, next) => {
 // @desc    Зээл төлөх
 // @route   POST /api/loans/:id/pay
 // @access  Private
+// Backend: src/controllers/loanController.js - payLoan function
+
 exports.payLoan = async (req, res, next) => {
   try {
     const { amount } = req.body;
@@ -239,10 +241,10 @@ exports.payLoan = async (req, res, next) => {
       return errorResponse(res, 400, 'Энэ зээлийг төлөх боломжгүй');
     }
 
-    // Хэтэвч шалгах
+    // ✅ Хэтэвч шалгах
     const wallet = await Wallet.findOne({ user: req.user.id });
     if (!wallet.hasBalance(amount)) {
-      return errorResponse(res, 400, 'Хэтэвчний үлдэгдэл хүрэлцэхгүй байна');
+      return errorResponse(res, 400, 'Хэтэвчний үлдэгдэл хүрэлцэхгүй байна. Эхлээд хэтэвчээ цэнэглэнэ үү.');
     }
 
     // Төлөх дүн их байвал
@@ -250,8 +252,10 @@ exports.payLoan = async (req, res, next) => {
       return errorResponse(res, 400, `Хэт их дүн оруулсан. Үлдэгдэл: ${loan.remainingAmount}₮`);
     }
 
-    // Хэтэвчээс хасах
-    wallet.deductBalance(amount);
+    // ✅ Хэтэвчээс хасах (зарцуулалт болгох)
+    wallet.balance -= amount;
+    wallet.totalSpent += amount; // Зээл төлөлт = зарцуулалт
+    wallet.lastTransactionAt = new Date();
     await wallet.save();
 
     // Зээл шинэчлэх
@@ -280,6 +284,15 @@ exports.payLoan = async (req, res, next) => {
       loan: loan._id,
       processedAt: new Date()
     });
+
+    // ✅ Profile-ийн зээлийн эрх буцааж нэмэх
+    if (loan.status === 'paid') {
+      const profile = await Profile.findOne({ user: req.user.id });
+      if (profile) {
+        profile.availableLoanLimit += loan.disbursedAmount; // Төлсөн дүнгээр эрх нэмэх
+        await profile.save();
+      }
+    }
 
     logger.info(`Зээл төлөгдлөө: ${loan.loanNumber}, Amount: ${amount}`);
 
@@ -345,10 +358,19 @@ exports.getAllLoans = async (req, res, next) => {
 // @access  Private/Admin
 // Backend: src/controllers/loanController.js
 
+
 exports.approveLoan = async (req, res) => {
   try {
+    const { approvedAmount } = req.body; // ✅ Админ дүнгээ оруулна
     const loan = await Loan.findById(req.params.id);
     
+    if (!loan) {
+      return res.status(404).json({
+        success: false,
+        message: 'Зээл олдсонгүй'
+      });
+    }
+
     if (loan.status !== 'under_review') {
       return res.status(400).json({
         success: false,
@@ -356,36 +378,45 @@ exports.approveLoan = async (req, res) => {
       });
     }
 
-    // ✅ Зээлийн дүнг хэтэвчинд нэмэх
-    const wallet = await Wallet.findOne({ user: loan.user });
-    wallet.balance += loan.approvedAmount;
-    await wallet.save();
+    // ✅ Validation - Зээлийн дүн шалгах
+    if (!approvedAmount || approvedAmount < 10000 || approvedAmount > 500000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Зээлийн дүн 10,000₮ - 500,000₮ хооронд байх ёстой'
+      });
+    }
 
-    // ✅ Гүйлгээ үүсгэх
-    await Transaction.create({
-      user: loan.user,
-      wallet: wallet._id,
-      type: 'loan_disbursement',
-      amount: loan.approvedAmount,
-      description: `Зээл олгогдлоо: ${loan.loanNumber}`,
-      status: 'completed',
-      relatedLoan: loan._id,
-    });
-
-    // ✅ Зээлийн дээд эрх багасгах
+    // ✅ Profile-ийн зээлийн эрхээс их эсэхийг шалгах
     const profile = await Profile.findOne({ user: loan.user });
-    profile.availableLoanLimit -= loan.approvedAmount;
-    await profile.save();
+    if (!profile || !profile.isVerified) {
+      return res.status(400).json({
+        success: false,
+        message: 'Хэрэглэгчийн profile баталгаажаагүй байна'
+      });
+    }
 
-    // ✅ Зээлийн төлөв шинэчлэх
-    loan.status = 'disbursed';
-    loan.disbursedAmount = loan.approvedAmount;
-    loan.disbursedAt = Date.now();
+    if (approvedAmount > profile.availableLoanLimit) {
+      return res.status(400).json({
+        success: false,
+        message: `Зээлийн дүн хэтэрсэн. Дээд эрх: ${profile.availableLoanLimit}₮`
+      });
+    }
+
+    // ✅ Зээл зөвшөөрөх
+    loan.approvedAmount = approvedAmount;
+    loan.status = 'approved';
+    loan.approvedAt = Date.now();
+    loan.approvedBy = req.user.id;
+    
+    // Хүү + хугацаа тооцоолох
+    loan.totalRepayment = Math.round(approvedAmount * (1 + loan.interestRate / 100));
+    loan.remainingAmount = loan.totalRepayment;
+    
     await loan.save();
 
     res.json({
       success: true,
-      message: 'Зээл амжилттай олгогдлоо',
+      message: 'Зээл амжилттай зөвшөөрөгдлөө',
       data: { loan }
     });
   } catch (error) {

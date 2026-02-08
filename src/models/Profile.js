@@ -97,6 +97,27 @@ const profileSchema = new mongoose.Schema({
     }
   },
 
+  // ✅ ШИНЭ: Зургууд
+  idCardFront: {
+    type: String, // Base64 эсвэл URL
+    required: [true, 'Иргэний үнэмлэхний урд тал оруулна уу']
+  },
+  idCardBack: {
+    type: String, // Base64 эсвэл URL
+    required: [true, 'Иргэний үнэмлэхний ард тал оруулна уу']
+  },
+  selfiePhoto: {
+    type: String, // Base64 эсвэл URL
+    required: [true, 'Selfie зураг оруулна уу']
+  },
+
+  // ✅ ШИНЭ: Зээлийн дээд эрх
+  availableLoanLimit: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+
   // Баталгаажуулалт
   isVerified: {
     type: Boolean,
@@ -107,11 +128,6 @@ const profileSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
-
-  // Зураг, баримт
-  profilePhoto: String,
-  idCardFront: String,
-  idCardBack: String,
   
 }, {
   timestamps: true
