@@ -49,7 +49,18 @@ exports.protect = async (req, res, next) => {
     });
   }
 };
+// Одоо байгаа protect функцийн дараа нэмэх
 
+exports.adminOnly = (req, res, next) => {
+  if (req.user && req.user.role === 'admin') {
+    next();
+  } else {
+    return res.status(403).json({
+      success: false,
+      message: 'Зөвхөн админ хандах эрхтэй'
+    });
+  }
+};
 // Role шалгах
 exports.authorize = (...roles) => {
   return (req, res, next) => {

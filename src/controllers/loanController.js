@@ -232,17 +232,7 @@ exports.requestApprovedLoan = async (req, res) => {
     }
 
     // 3. Идэвхтэй зээл байгаа эсэхийг шалгах
-    const activeLoans = await Loan.find({
-      user: userId,
-      status: { $in: ['pending_disbursement', 'disbursed', 'active', 'overdue'] }
-    });
-
-    if (activeLoans.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Идэвхтэй зээлтэй байна. Эхлээд төлнө үү.'
-      });
-    }
+   
 
     // 4. Шинэ зээл үүсгэх (pending_disbursement төлөвтэй)
     const loan = await Loan.create({

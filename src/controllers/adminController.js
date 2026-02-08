@@ -207,7 +207,7 @@ exports.getUserWallet = async (req, res, next) => {
   }
 };
 
-// ✅ ШИНЭ: Баталгаажуулалт хүлээгдэж буй profile-үүд
+// @desc    Баталгаажуулалт хүлээгдэж буй profile-үүд
 // @route   GET /api/admin/profiles/pending
 // @access  Private/Admin
 exports.getPendingProfiles = async (req, res, next) => {
@@ -218,7 +218,7 @@ exports.getPendingProfiles = async (req, res, next) => {
 
     const profiles = await Profile.find({ 
       isVerified: false,
-      verificationStatus: { $ne: 'rejected' } // Татгалзагдсан profile-үүдийг харуулахгүй
+      verificationStatus: { $ne: 'rejected' }
     })
       .populate('user', 'firstName lastName email phone')
       .sort({ createdAt: -1 })
@@ -245,7 +245,7 @@ exports.getPendingProfiles = async (req, res, next) => {
   }
 };
 
-// ✅ ШИНЭ: Profile дэлгэрэнгүй + зургууд
+// @desc    Profile дэлгэрэнгүй + зургууд
 // @route   GET /api/admin/profiles/:id
 // @access  Private/Admin
 exports.getProfileDetails = async (req, res, next) => {
@@ -264,7 +264,25 @@ exports.getProfileDetails = async (req, res, next) => {
   }
 };
 
-// ✅ ЗАСВАРЛАСАН: Profile баталгаажуулах - req.body хоосон байсныг засав
+// @desc    User ID-аар Profile авах
+// @route   GET /api/admin/profiles/user/:userId
+// @access  Private/Admin
+exports.getProfileByUserId = async (req, res, next) => {
+  try {
+    const profile = await Profile.findOne({ user: req.params.userId })
+      .populate('user', 'firstName lastName email phone');
+
+    if (!profile) {
+      return errorResponse(res, 404, 'Profile олдсонгүй');
+    }
+
+    successResponse(res, 200, 'Амжилттай', { profile });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Profile баталгаажуулах
 // @route   PUT /api/admin/profiles/:id/verify
 // @access  Private/Admin
 exports.verifyProfile = async (req, res, next) => {
@@ -279,7 +297,6 @@ exports.verifyProfile = async (req, res, next) => {
       return errorResponse(res, 400, 'Profile аль хэдийн баталгаажсан байна');
     }
 
-    // ✅ Profile баталгаажуулах
     profile.isVerified = true;
     profile.verifiedAt = new Date();
     profile.verifiedBy = req.user.id;
@@ -293,7 +310,7 @@ exports.verifyProfile = async (req, res, next) => {
   }
 };
 
-// ✅ Profile татгалзах
+// @desc    Profile татгалзах
 // @route   PUT /api/admin/profiles/:id/reject
 // @access  Private/Admin
 exports.rejectProfile = async (req, res, next) => {
@@ -310,7 +327,6 @@ exports.rejectProfile = async (req, res, next) => {
       return errorResponse(res, 404, 'Profile олдсонгүй');
     }
 
-    // Profile татгалзах
     profile.isVerified = false;
     profile.verificationStatus = 'rejected';
     profile.rejectedAt = new Date();
@@ -325,7 +341,7 @@ exports.rejectProfile = async (req, res, next) => {
   }
 };
 
-// ✅ ШИНЭ: Зээлийн мэдээлэл шалгуулах хүсэлтүүд (3000₮ төлсөн)
+// @desc    Зээлийн мэдээлэл шалгуулах хүсэлтүүд
 // @route   GET /api/admin/loans/pending-verification
 // @access  Private/Admin
 exports.getPendingVerificationLoans = async (req, res, next) => {
@@ -355,7 +371,7 @@ exports.getPendingVerificationLoans = async (req, res, next) => {
   }
 };
 
-// ✅ ШИНЭ: Зээлийг "under_review" төлөвт шилжүүлэх
+// @desc    Зээлийг "under_review" төлөвт шилжүүлэх
 // @route   PUT /api/admin/loans/:id/start-review
 // @access  Private/Admin
 exports.startLoanReview = async (req, res, next) => {
@@ -379,3 +395,35 @@ exports.startLoanReview = async (req, res, next) => {
     next(error);
   }
 };
+
+// @desc    Зээл авах хүсэлтүүд (pending_disbursement)
+// @route   GET /api/admin/loans/pending-disbursement
+// @access  Private/Admin
+exports.getPendingDisbursementLoans = async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 20;
+    const skip = (page - 1) * limit;
+
+    const total = await Loan.countDocuments({ status: 'pending_disbursement' });
+    const loans = await Loan.find({ status: 'pending_disbursement' })
+      .populate('user', 'firstName lastName phone email')
+      .sort('-createdAt')
+      .skip(skip)
+      .limit(limit);
+
+    successResponse(res, 200, 'Зээл авах хүсэлтүүд', {
+      loans,
+      pagination: {
+        total,
+        page,
+        pages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = exports;
