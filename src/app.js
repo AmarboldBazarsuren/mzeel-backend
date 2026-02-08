@@ -35,14 +35,14 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use('/uploads', express.static('uploads'));
 
 // Rate limiting - API хамгаалалт
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 минут
-  max: 100, // 100 хүсэлт/IP
-  message: 'Хэт олон хүсэлт илгээлээ. 15 минутын дараа дахин оролдоно уу.',
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use('/api/', limiter);
+// const limiter = rateLimit({
+//   windowMs: 15 * 60 * 1000, // 15 минут
+//   max: 100, // 100 хүсэлт/IP
+//   message: 'Хэт олон хүсэлт илгээлээ. 15 минутын дараа дахин оролдоно уу.',
+//   standardHeaders: true,
+//   legacyHeaders: false,
+// });
+// app.use('/api/', limiter);
 
 // ============ ROUTES ============
 app.use('/api/auth', require('./routes/auth.routes'));

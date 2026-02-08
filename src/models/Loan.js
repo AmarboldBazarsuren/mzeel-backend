@@ -61,9 +61,10 @@ const loanSchema = new mongoose.Schema({
   status: {
     type: String,
     enum: [
-      'pending_verification',  // ✅ Зөв нэр
+      'pending_verification',  
       'under_review',
       'approved',
+      'pending_disbursement',
       'disbursed',
       'active',
       'paid',

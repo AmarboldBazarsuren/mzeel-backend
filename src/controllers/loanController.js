@@ -192,7 +192,155 @@ exports.requestLoan = async (req, res, next) => {
     });
   }
 };
+// ✅ ШИНЭ: Зөвшөөрсөн зээлээс мөнгө авах
+// @route   POST /api/loans/request-approved
+// @access  Private
+exports.requestApprovedLoan = async (req, res) => {
+  try {
+    const { amount } = req.body;
+    const userId = req.user.id;
 
+    // 1. Profile шалгах
+    const profile = await Profile.findOne({ user: userId });
+    if (!profile || !profile.isVerified) {
+      return res.status(400).json({
+        success: false,
+        message: 'Хувийн мэдээлэл баталгаажаагүй байна'
+      });
+    }
+
+    // 2. Зээлийн эрх шалгах
+    if (profile.availableLoanLimit <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Зээлийн эрх байхгүй байна'
+      });
+    }
+
+    if (amount > profile.availableLoanLimit) {
+      return res.status(400).json({
+        success: false,
+        message: `Дээд хэмжээ: ${profile.availableLoanLimit}₮`
+      });
+    }
+
+    if (amount < 10000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Хамгийн багадаа 10,000₮ авах ёстой'
+      });
+    }
+
+    // 3. Идэвхтэй зээл байгаа эсэхийг шалгах
+    const activeLoans = await Loan.find({
+      user: userId,
+      status: { $in: ['pending_disbursement', 'disbursed', 'active', 'overdue'] }
+    });
+
+    if (activeLoans.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Идэвхтэй зээлтэй байна. Эхлээд төлнө үү.'
+      });
+    }
+
+    // 4. Шинэ зээл үүсгэх (pending_disbursement төлөвтэй)
+    const loan = await Loan.create({
+      user: userId,
+      requestedAmount: amount,
+      approvedAmount: amount,
+      interestRate: 5,
+      term: 30,
+      totalRepayment: Math.round(amount * 1.05),
+      remainingAmount: Math.round(amount * 1.05),
+      status: 'pending_disbursement', // Админ зөвшөөрөхийг хүлээнэ
+      dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+    });
+
+    console.log(`✅ Зээлийн хүсэлт үүсгэгдлээ: ${loan.loanNumber}, Amount: ${amount}`);
+
+    return res.status(201).json({
+      success: true,
+      message: 'Зээлийн хүсэлт илгээгдлээ. Админ зөвшөөрнө.',
+      data: { loan }
+    });
+
+  } catch (error) {
+    console.error(`❌ Request approved loan error: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Зээл авахад алдаа гарлаа'
+    });
+  }
+};
+
+// ✅ ШИНЭ: Админ зээл олгох хүсэлтийг зөвшөөрөх
+// @route   PUT /api/loans/:id/approve-disbursement
+// @access  Private/Admin
+exports.approveLoanDisbursement = async (req, res) => {
+  try {
+    const loan = await Loan.findById(req.params.id);
+
+    if (!loan) {
+      return res.status(404).json({
+        success: false,
+        message: 'Зээл олдсонгүй'
+      });
+    }
+
+    if (loan.status !== 'pending_disbursement') {
+      return res.status(400).json({
+        success: false,
+        message: 'Зөвхөн pending_disbursement төлөвтэй зээлийг зөвшөөрч болно'
+      });
+    }
+
+    // 1. Хэтэвчинд мөнгө нэмэх
+    const wallet = await Wallet.findOne({ user: loan.user });
+    wallet.addBalance(loan.approvedAmount);
+    await wallet.save();
+
+    // 2. Transaction үүсгэх
+    await Transaction.create({
+      user: loan.user,
+      wallet: wallet._id,
+      type: 'loan_disbursement',
+      amount: loan.approvedAmount,
+      balanceBefore: wallet.balance - loan.approvedAmount,
+      balanceAfter: wallet.balance,
+      status: 'completed',
+      description: `Зээл олгох - ${loan.loanNumber}`,
+      loan: loan._id,
+      processedAt: new Date()
+    });
+
+    // 3. Зээлийн эрх багасгах
+    const profile = await Profile.findOne({ user: loan.user });
+    profile.availableLoanLimit -= loan.approvedAmount;
+    await profile.save();
+
+    // 4. Зээлийн төлөв өөрчлөх
+    loan.disbursedAmount = loan.approvedAmount;
+    loan.status = 'disbursed';
+    loan.disbursedAt = new Date();
+    await loan.save();
+
+    console.log(`✅ Зээл олгогдлоо: ${loan.loanNumber}, Amount: ${loan.approvedAmount}`);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Зээл амжилттай олгогдлоо',
+      data: { loan }
+    });
+
+  } catch (error) {
+    console.error(`❌ Approve disbursement error: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Зээл олгоход алдаа гарлаа'
+    });
+  }
+};
 // @desc    Миний зээлүүд
 // @route   GET /api/loans/my-loans
 // @access  Private
