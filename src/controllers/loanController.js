@@ -343,38 +343,56 @@ exports.getAllLoans = async (req, res, next) => {
 // @desc    Зээл зөвшөөрөх (Admin/Operator)
 // @route   PUT /api/loans/:id/approve
 // @access  Private/Admin
-exports.approveLoan = async (req, res, next) => {
+// Backend: src/controllers/loanController.js
+
+exports.approveLoan = async (req, res) => {
   try {
-    const { approvedAmount } = req.body;
     const loan = await Loan.findById(req.params.id);
-
-    if (!loan) {
-      return errorResponse(res, 404, 'Зээл олдсонгүй');
+    
+    if (loan.status !== 'under_review') {
+      return res.status(400).json({
+        success: false,
+        message: 'Зөвхөн шалгаж байгаа зээлийг зөвшөөрч болно'
+      });
     }
 
-    if (loan.status !== 'pending_verification' && loan.status !== 'under_review') {
-      return errorResponse(res, 400, 'Энэ зээлийг зөвшөөрөх боломжгүй');
-    }
+    // ✅ Зээлийн дүнг хэтэвчинд нэмэх
+    const wallet = await Wallet.findOne({ user: loan.user });
+    wallet.balance += loan.approvedAmount;
+    await wallet.save();
 
-    if (!approvedAmount || approvedAmount < 10000 || approvedAmount > 500000) {
-      return errorResponse(res, 400, 'Зөвшөөрөгдөх дүн 10,000₮ - 500,000₮ хооронд байх ёстой');
-    }
+    // ✅ Гүйлгээ үүсгэх
+    await Transaction.create({
+      user: loan.user,
+      wallet: wallet._id,
+      type: 'loan_disbursement',
+      amount: loan.approvedAmount,
+      description: `Зээл олгогдлоо: ${loan.loanNumber}`,
+      status: 'completed',
+      relatedLoan: loan._id,
+    });
 
-    loan.approvedAmount = approvedAmount;
-    loan.status = 'approved';
-    loan.approvedAt = new Date();
-    loan.approvedBy = req.user.id;
-    loan.adminNotes = req.body.notes || '';
+    // ✅ Зээлийн дээд эрх багасгах
+    const profile = await Profile.findOne({ user: loan.user });
+    profile.availableLoanLimit -= loan.approvedAmount;
+    await profile.save();
+
+    // ✅ Зээлийн төлөв шинэчлэх
+    loan.status = 'disbursed';
+    loan.disbursedAmount = loan.approvedAmount;
+    loan.disbursedAt = Date.now();
     await loan.save();
 
-    await loan.populate('user', 'firstName lastName phone email');
-
-    logger.info(`Зээл зөвшөөрөгдлөө: ${loan.loanNumber}, Amount: ${approvedAmount} by ${req.user.email}`);
-
-    successResponse(res, 200, 'Зээл амжилттай зөвшөөрөгдлөө', { loan });
-
+    res.json({
+      success: true,
+      message: 'Зээл амжилттай олгогдлоо',
+      data: { loan }
+    });
   } catch (error) {
-    next(error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 };
 
