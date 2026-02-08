@@ -16,6 +16,8 @@ const {
 } = require('../controllers/loanController');
 
 // User routes
+router.post('/request-verification', protect);
+
 router.post('/verify', protect, loanLimiter, verifyLoan);
 router.post('/request', protect, loanValidation, validate, requestLoan);
 router.get('/my-loans', protect, getMyLoans);
@@ -23,6 +25,8 @@ router.get('/:id', protect, getLoanDetails);
 router.post('/:id/pay', protect, payLoan);
 
 // Admin routes
+router.get('/verification-pending', protect,);
+
 router.get('/admin/all', protect, isAdmin, getAllLoans);
 router.put('/:id/approve', protect, isAdmin, approveLoan);
 router.put('/:id/reject', protect, isAdmin, rejectLoan);

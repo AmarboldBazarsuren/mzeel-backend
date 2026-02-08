@@ -58,7 +58,7 @@ const loanSchema = new mongoose.Schema({
   status: {
     type: String,
     enum: [
-      'pending_verification',  // Баталгаажуулалт хүлээж байна (3000₮ төлсөн)
+      'verification_pending',  // Баталгаажуулалт хүлээж байна (3000₮ төлсөн)
       'under_review',          // Шалгаж байна
       'approved',              // Зөвшөөрөгдсөн (operator дүн оруулсан)
       'disbursed',             // Олгогдсон (хэтэвчинд орсон)
@@ -68,9 +68,12 @@ const loanSchema = new mongoose.Schema({
       'defaulted',             // Төлөх чадваргүй
       'cancelled'              // Цуцлагдсан
     ],
-    default: 'pending_verification'
+    default: 'verification_pending'
   },
-  
+  verificationFeePaid: {
+    type: Boolean,
+    default: false
+  },
   // Огноо
   applicationDate: {
     type: Date,

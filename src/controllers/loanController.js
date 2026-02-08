@@ -359,9 +359,11 @@ exports.getAllLoans = async (req, res, next) => {
 // Backend: src/controllers/loanController.js
 
 
+// Backend: src/controllers/loanController.js - approveLoan function
+
 exports.approveLoan = async (req, res) => {
   try {
-    const { approvedAmount } = req.body; // ✅ Админ дүнгээ оруулна
+    const { approvedAmount } = req.body; // ✅ Админ зээлийн дүнг тогтооно
     const loan = await Loan.findById(req.params.id);
     
     if (!loan) {
@@ -386,21 +388,8 @@ exports.approveLoan = async (req, res) => {
       });
     }
 
-    // ✅ Profile-ийн зээлийн эрхээс их эсэхийг шалгах
-    const profile = await Profile.findOne({ user: loan.user });
-    if (!profile || !profile.isVerified) {
-      return res.status(400).json({
-        success: false,
-        message: 'Хэрэглэгчийн profile баталгаажаагүй байна'
-      });
-    }
-
-    if (approvedAmount > profile.availableLoanLimit) {
-      return res.status(400).json({
-        success: false,
-        message: `Зээлийн дүн хэтэрсэн. Дээд эрх: ${profile.availableLoanLimit}₮`
-      });
-    }
+    // ✅ Profile-ийн зээлийн эрхээс их эсэхийг шалгахгүй
+    // Учир нь admin-д зээлийн хэмжээг тогтоох эрх байна
 
     // ✅ Зээл зөвшөөрөх
     loan.approvedAmount = approvedAmount;
@@ -413,6 +402,13 @@ exports.approveLoan = async (req, res) => {
     loan.remainingAmount = loan.totalRepayment;
     
     await loan.save();
+
+    // ✅ Profile-д зээлийн эрх нэмэх (admin тогтоосон дүнгээр)
+    const profile = await Profile.findOne({ user: loan.user });
+    if (profile) {
+      profile.availableLoanLimit = approvedAmount;
+      await profile.save();
+    }
 
     res.json({
       success: true,
@@ -454,3 +450,163 @@ exports.rejectLoan = async (req, res, next) => {
     next(error);
   }
 };
+exports.requestVerification = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const VERIFICATION_FEE = 3000;
+
+    // 1. Wallet шалгах
+    const wallet = await Wallet.findOne({ user: userId });
+    if (!wallet || wallet.balance < VERIFICATION_FEE) {
+      return res.status(400).json({
+        success: false,
+        message: 'Хэтэвчний үлдэгдэл хүрэлцэхгүй байна'
+      });
+    }
+
+    // 2. Хэдийнэ шалгуулж байгаа эсэхийг шалгах
+    const existingRequest = await Loan.findOne({
+      user: userId,
+      status: 'verification_pending', // Шинэ төлөв
+      verificationFeePaid: true
+    });
+
+    if (existingRequest) {
+      return res.status(400).json({
+        success: false,
+        message: 'Таны хүсэлт аль хэдийн шалгагдаж байна'
+      });
+    }
+
+    // 3. Төлбөр хийх
+    wallet.balance -= VERIFICATION_FEE;
+    wallet.totalSpent += VERIFICATION_FEE;
+    await wallet.save();
+
+    // 4. Transaction үүсгэх
+    await Transaction.create({
+      user: userId,
+      type: 'loan_verification_fee',
+      amount: VERIFICATION_FEE,
+      status: 'completed',
+      description: 'Зээлийн мэдээлэл шалгуулах төлбөр'
+    });
+
+    // 5. Loan request үүсгэх (verification_pending)
+    const loanRequest = await Loan.create({
+      user: userId,
+      status: 'verification_pending', // ✅ Шинэ төлөв
+      verificationFeePaid: true,
+      verificationPaidAt: new Date(),
+      requestedAmount: 0, // Админ тогтооно
+      purpose: 'Зээлийн эрх авах',
+      repaymentMonths: 1 // Default
+    });
+
+    res.json({
+      success: true,
+      message: 'Төлбөр амжилттай хийгдлээ. Таны хүсэлт админд илгээгдлээ.',
+      data: {
+        loanRequest,
+        remainingBalance: wallet.balance
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+// ✅ ADMIN: Зээл шалгуулах хүсэлтүүд
+// @route   GET /api/admin/loans/verification-pending
+// @access  Private/Admin
+exports.getPendingVerificationLoans = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 20;
+    const skip = (page - 1) * limit;
+
+    const loans = await Loan.find({
+      status: 'verification_pending',
+      verificationFeePaid: true
+    })
+      .populate('user', 'firstName lastName email phone')
+      .sort({ verificationPaidAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Loan.countDocuments({
+      status: 'verification_pending',
+      verificationFeePaid: true
+    });
+
+    res.json({
+      success: true,
+      data: {
+        loans,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit)
+        }
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// ✅ ADMIN: Шалгалт эхлүүлэх
+// @route   PUT /api/admin/loans/:id/start-review
+// @access  Private/Admin
+exports.startLoanReview = async (req, res) => {
+  try {
+    const loan = await Loan.findById(req.params.id);
+
+    if (!loan) {
+      return res.status(404).json({
+        success: false,
+        message: 'Зээл олдсонгүй'
+      });
+    }
+
+    if (loan.status !== 'verification_pending') {
+      return res.status(400).json({
+        success: false,
+        message: 'Зөвхөн verification_pending төлөвтэй зээлийг шалгаж болно'
+      });
+    }
+
+    loan.status = 'under_review'; // ✅ Шалгаж байна
+    loan.reviewStartedAt = new Date();
+    loan.reviewedBy = req.user.id;
+    await loan.save();
+
+    res.json({
+      success: true,
+      message: 'Шалгалт эхэллээ',
+      data: { loan }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+module.exports = exports;
+
+
+
+
+
+

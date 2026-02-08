@@ -193,21 +193,29 @@ exports.getUserDetails = async (req, res, next) => {
 exports.getPendingProfiles = async (req, res, next) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const limit = 20;
     const skip = (page - 1) * limit;
 
-    const total = await Profile.countDocuments({ isVerified: false });
-    const profiles = await Profile.find({ isVerified: false })
-      .populate('user', 'firstName lastName phone email')
-      .sort('-createdAt')
+    const profiles = await Profile.find({ 
+      isVerified: false,
+      verificationStatus: 'pending' 
+    })
+      .populate('user', 'firstName lastName email phone')
+      .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
 
-    successResponse(res, 200, 'Баталгаажуулалт хүлээгдэж буй profile-үүд', {
+    const total = await Profile.countDocuments({ 
+      isVerified: false,
+      verificationStatus: 'pending' 
+    });
+
+    successResponse(res, 200, 'Амжилттай', {
       profiles,
       pagination: {
-        total,
         page,
+        limit,
+        total,
         pages: Math.ceil(total / limit)
       }
     });
@@ -223,13 +231,13 @@ exports.getPendingProfiles = async (req, res, next) => {
 exports.getProfileDetails = async (req, res, next) => {
   try {
     const profile = await Profile.findById(req.params.id)
-      .populate('user', 'firstName lastName phone email');
+      .populate('user', 'firstName lastName email phone');
 
     if (!profile) {
       return errorResponse(res, 404, 'Profile олдсонгүй');
     }
 
-    successResponse(res, 200, 'Profile дэлгэрэнгүй', { profile });
+    successResponse(res, 200, 'Амжилттай', { profile });
 
   } catch (error) {
     next(error);
@@ -239,12 +247,45 @@ exports.getProfileDetails = async (req, res, next) => {
 // ✅ ШИНЭ: Profile баталгаажуулах + зээлийн эрх өгөх
 // @route   PUT /api/admin/profiles/:id/verify
 // @access  Private/Admin
+// Backend: src/controllers/adminController.js - Profile verification бүлэг
+
+// ✅ Profile баталгаажуулах (зээлийн эрхгүй)
+// @route   PUT /api/admin/profiles/:id/verify
+// @access  Private/Admin
 exports.verifyProfile = async (req, res, next) => {
   try {
-    const { loanLimit } = req.body; // Зээлийн эрхийн дүн
+    const profile = await Profile.findById(req.params.id);
 
-    if (!loanLimit || loanLimit < 0) {
-      return errorResponse(res, 400, 'Зээлийн эрхийн дүнгээ оруулна уу');
+    if (!profile) {
+      return errorResponse(res, 404, 'Profile олдсонгүй');
+    }
+
+    if (profile.isVerified) {
+      return errorResponse(res, 400, 'Profile аль хэдийн баталгаажсан байна');
+    }
+
+    profile.isVerified = true;
+    profile.verifiedAt = new Date();
+    profile.verifiedBy = req.user.id;
+    profile.verificationStatus = 'approved';
+    await profile.save();
+
+    successResponse(res, 200, 'Profile амжилттай баталгаажлаа', { profile });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ✅ Profile татгалзах
+// @route   PUT /api/admin/profiles/:id/reject
+// @access  Private/Admin
+exports.rejectProfile = async (req, res, next) => {
+  try {
+    const { reason } = req.body;
+
+    if (!reason || !reason.trim()) {
+      return errorResponse(res, 400, 'Татгалзах шалтгаанаа бичнэ үү');
     }
 
     const profile = await Profile.findById(req.params.id);
@@ -253,13 +294,17 @@ exports.verifyProfile = async (req, res, next) => {
       return errorResponse(res, 404, 'Profile олдсонгүй');
     }
 
-    profile.isVerified = true;
-    profile.verifiedAt = new Date();
-    profile.verifiedBy = req.user.id;
-    profile.availableLoanLimit = loanLimit; // ✅ Зээлийн эрх өгөх
+    // Profile устгахын оронд rejected гэж тэмдэглэх
+    profile.isVerified = false;
+    profile.verificationStatus = 'rejected';
+    profile.rejectedAt = new Date();
+    profile.rejectedBy = req.user.id;
+    profile.rejectionReason = reason;
     await profile.save();
 
-    successResponse(res, 200, 'Profile амжилттай баталгаажлаа', { profile });
+    // TODO: User-т мэдэгдэл илгээх (reason-тай)
+
+    successResponse(res, 200, 'Profile татгалзагдлаа');
 
   } catch (error) {
     next(error);
