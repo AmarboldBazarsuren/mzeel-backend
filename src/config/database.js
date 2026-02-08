@@ -26,6 +26,7 @@ const connectDB = async () => {
 
   } catch (error) {
     logger.error(`❌ MongoDB холболт амжилтгүй: ${error.message}`);
+    logger.error(`Дэлгэрэнгүй: ${error.stack}`);
     process.exit(1);
   }
 };
