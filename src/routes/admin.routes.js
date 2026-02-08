@@ -1,5 +1,3 @@
-// mzeel-backend/src/routes/admin.routes.js
-
 const express = require('express');
 const router = express.Router();
 const {
@@ -22,24 +20,14 @@ const {
   getLoanDetails,
   approveLoan,
   rejectLoan,
-  disburseLoan
+  // disburseLoan // ✅ УСТГАСАН
 } = require('../controllers/loanController');
 const {
   getPendingWithdrawals,
   approveWithdrawal,
   rejectWithdrawal
 } = require('../controllers/withdrawalController');
-
-// ✅ ТҮР protect болон adminOnly-ийг энд шууд бичих
-const protect = async (req, res, next) => {
-  // Энэ хэсгийг одоогоор хоосон үлдээнэ
-  next();
-};
-
-const adminOnly = (req, res, next) => {
-  // Энэ хэсгийг одоогоор хоосон үлдээнэ
-  next();
-};
+const { protect, adminOnly } = require('../middlewares/auth.middleware');
 
 // Бүх route-ууд админ хандалттай
 router.use(protect, adminOnly);
@@ -68,7 +56,7 @@ router.get('/loans/:id', getLoanDetails);
 router.put('/loans/:id/start-review', startLoanReview);
 router.put('/loans/:id/approve', approveLoan);
 router.put('/loans/:id/reject', rejectLoan);
-router.put('/loans/:id/disburse', disburseLoan);
+// router.put('/loans/:id/disburse', disburseLoan); // ✅ УСТГАСАН
 
 // ===== WITHDRAWALS =====
 router.get('/withdrawals/pending', getPendingWithdrawals);
