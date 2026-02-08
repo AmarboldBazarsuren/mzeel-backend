@@ -8,6 +8,9 @@ const logger = require('../utils/logger');
 // @desc    Зээлийн мэдээлэл баталгаажуулах (3000₮ төлөх)
 // @route   POST /api/loans/verify
 // @access  Private
+// @desc    Зээлийн мэдээлэл баталгаажуулах (3000₮ төлөх)
+// @route   POST /api/loans/verify
+// @access  Private
 exports.verifyLoan = async (req, res, next) => {
   try {
     const userId = req.user.id;
@@ -16,7 +19,17 @@ exports.verifyLoan = async (req, res, next) => {
     // Profile шалгах
     const profile = await Profile.findOne({ user: userId });
     if (!profile) {
-      return errorResponse(res, 400, 'Эхлээд хувийн мэдээллээ бөглөнө үү');
+      return res.status(400).json({
+        success: false,
+        message: 'Эхлээд хувийн мэдээллээ бөглөнө үү'
+      });
+    }
+
+    if (!profile.isVerified) {
+      return res.status(400).json({
+        success: false,
+        message: 'Хувийн мэдээлэл баталгаажаагүй байна. Админ баталгаажуулах хүртэл хүлээнэ үү.'
+      });
     }
 
     // Идэвхтэй зээл байгаа эсэх шалгах
@@ -26,13 +39,19 @@ exports.verifyLoan = async (req, res, next) => {
     });
 
     if (activeLoans.length > 0) {
-      return errorResponse(res, 400, 'Та идэвхтэй зээлтэй байна. Эхлээд төлөх шаардлагатай.');
+      return res.status(400).json({
+        success: false,
+        message: 'Та идэвхтэй зээлтэй байна. Эхлээд төлөх шаардлагатай.'
+      });
     }
 
     // Хэтэвч шалгах
     const wallet = await Wallet.findOne({ user: userId });
-    if (!wallet.hasBalance(verificationFee)) {
-      return errorResponse(res, 400, `Хэтэвчний үлдэгдэл хүрэлцэхгүй байна. ${verificationFee}₮ цэнэглэнэ үү.`);
+    if (!wallet || !wallet.hasBalance(verificationFee)) {
+      return res.status(400).json({
+        success: false,
+        message: `Хэтэвчний үлдэгдэл хүрэлцэхгүй байна. ${verificationFee}₮ цэнэглэнэ үү.`
+      });
     }
 
     // Баталгаажуулалтын төлбөр төлөх
@@ -55,33 +74,45 @@ exports.verifyLoan = async (req, res, next) => {
     // Зээлийн хүсэлт үүсгэх
     const loan = await Loan.create({
       user: userId,
-      requestedAmount: 0, // Одоохондоо 0
+      requestedAmount: 0,
       verificationFee,
       verificationPaid: true,
       verificationPaidAt: new Date(),
       verificationTransaction: transaction._id,
-      status: 'pending_verification'
+      status: 'pending_verification',
+      term: 30,
+      interestRate: 5
     });
 
-    logger.info(`Verification fee төлөгдлөө: User ${userId}, Loan ${loan._id}`);
+    console.log(`✅ Verification fee төлөгдлөө: User ${userId}, Loan ${loan._id}`);
 
-    successResponse(res, 201, 'Баталгаажуулалтын төлбөр амжилттай төлөгдлөө. Таны зээлийн мэдээллийг шалгаж байна.', {
-      loan: {
-        id: loan._id,
-        loanNumber: loan.loanNumber,
-        status: loan.status,
-        verificationPaid: loan.verificationPaid,
-        verificationPaidAt: loan.verificationPaidAt
-      },
-      transaction
+    return res.status(201).json({
+      success: true,
+      message: 'Баталгаажуулалтын төлбөр амжилттай төлөгдлөө. Таны зээлийн мэдээллийг шалгаж байна.',
+      data: {
+        loan: {
+          id: loan._id,
+          loanNumber: loan.loanNumber,
+          status: loan.status,
+          verificationPaid: loan.verificationPaid,
+          verificationPaidAt: loan.verificationPaidAt
+        },
+        transaction
+      }
     });
 
   } catch (error) {
-    logger.error(`Verification error: ${error.message}`);
-    next(error);
+    console.error(`❌ Verification error: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Зээлийн мэдээлэл баталгаажуулахад алдаа гарлаа'
+    });
   }
 };
 
+// @desc    Зээл авах (approved болсны дараа)
+// @route   POST /api/loans/request
+// @access  Private
 // @desc    Зээл авах (approved болсны дараа)
 // @route   POST /api/loans/request
 // @access  Private
@@ -97,12 +128,18 @@ exports.requestLoan = async (req, res, next) => {
     });
 
     if (!loan) {
-      return errorResponse(res, 400, 'Зөвшөөрөгдсөн зээл олдсонгүй. Эхлээд баталгаажуулалт хийнэ үү.');
+      return res.status(400).json({
+        success: false,
+        message: 'Зөвшөөрөгдсөн зээл олдсонгүй. Эхлээд баталгаажуулалт хийнэ үү.'
+      });
     }
 
     // Дүн шалгах
-    if (amount < 1000 || amount > loan.approvedAmount) {
-      return errorResponse(res, 400, `Зээлийн дүн 1,000₮ - ${loan.approvedAmount}₮ хооронд байх ёстой`);
+    if (amount < 10000 || amount > loan.approvedAmount) {
+      return res.status(400).json({
+        success: false,
+        message: `Зээлийн дүн 10,000₮ - ${loan.approvedAmount}₮ хооронд байх ёстой`
+      });
     }
 
     // Хэтэвч авах
@@ -135,17 +172,24 @@ exports.requestLoan = async (req, res, next) => {
       processedAt: new Date()
     });
 
-    logger.info(`Зээл олгогдлоо: ${loan.loanNumber}, Amount: ${amount}`);
+    console.log(`✅ Зээл олгогдлоо: ${loan.loanNumber}, Amount: ${amount}`);
 
-    successResponse(res, 200, 'Зээл амжилттай олгогдлоо', {
-      loan,
-      transaction,
-      wallet
+    return res.status(200).json({
+      success: true,
+      message: 'Зээл амжилттай олгогдлоо',
+      data: {
+        loan,
+        transaction,
+        wallet
+      }
     });
 
   } catch (error) {
-    logger.error(`Loan request error: ${error.message}`);
-    next(error);
+    console.error(`❌ Loan request error: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Зээл авахад алдаа гарлаа'
+    });
   }
 };
 

@@ -1,3 +1,5 @@
+// Backend: src/controllers/adminController.js
+
 const User = require('../models/User');
 const Wallet = require('../models/Wallet');
 const Loan = require('../models/Loan');
@@ -187,6 +189,24 @@ exports.getUserDetails = async (req, res, next) => {
   }
 };
 
+// @desc    Хэрэглэгчийн хэтэвчний мэдээлэл авах
+// @route   GET /api/admin/users/:id/wallet
+// @access  Private/Admin
+exports.getUserWallet = async (req, res, next) => {
+  try {
+    const wallet = await Wallet.findOne({ user: req.params.id });
+
+    if (!wallet) {
+      return errorResponse(res, 404, 'Хэтэвч олдсонгүй');
+    }
+
+    successResponse(res, 200, 'Хэтэвчний мэдээлэл', { wallet });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
 // ✅ ШИНЭ: Баталгаажуулалт хүлээгдэж буй profile-үүд
 // @route   GET /api/admin/profiles/pending
 // @access  Private/Admin
@@ -198,7 +218,7 @@ exports.getPendingProfiles = async (req, res, next) => {
 
     const profiles = await Profile.find({ 
       isVerified: false,
-      verificationStatus: 'pending' 
+      verificationStatus: { $ne: 'rejected' } // Татгалзагдсан profile-үүдийг харуулахгүй
     })
       .populate('user', 'firstName lastName email phone')
       .sort({ createdAt: -1 })
@@ -207,7 +227,7 @@ exports.getPendingProfiles = async (req, res, next) => {
 
     const total = await Profile.countDocuments({ 
       isVerified: false,
-      verificationStatus: 'pending' 
+      verificationStatus: { $ne: 'rejected' }
     });
 
     successResponse(res, 200, 'Амжилттай', {
@@ -244,12 +264,7 @@ exports.getProfileDetails = async (req, res, next) => {
   }
 };
 
-// ✅ ШИНЭ: Profile баталгаажуулах + зээлийн эрх өгөх
-// @route   PUT /api/admin/profiles/:id/verify
-// @access  Private/Admin
-// Backend: src/controllers/adminController.js - Profile verification бүлэг
-
-// ✅ Profile баталгаажуулах (зээлийн эрхгүй)
+// ✅ ЗАСВАРЛАСАН: Profile баталгаажуулах - req.body хоосон байсныг засав
 // @route   PUT /api/admin/profiles/:id/verify
 // @access  Private/Admin
 exports.verifyProfile = async (req, res, next) => {
@@ -264,6 +279,7 @@ exports.verifyProfile = async (req, res, next) => {
       return errorResponse(res, 400, 'Profile аль хэдийн баталгаажсан байна');
     }
 
+    // ✅ Profile баталгаажуулах
     profile.isVerified = true;
     profile.verifiedAt = new Date();
     profile.verifiedBy = req.user.id;
@@ -294,37 +310,13 @@ exports.rejectProfile = async (req, res, next) => {
       return errorResponse(res, 404, 'Profile олдсонгүй');
     }
 
-    // Profile устгахын оронд rejected гэж тэмдэглэх
+    // Profile татгалзах
     profile.isVerified = false;
     profile.verificationStatus = 'rejected';
     profile.rejectedAt = new Date();
     profile.rejectedBy = req.user.id;
     profile.rejectionReason = reason;
     await profile.save();
-
-    // TODO: User-т мэдэгдэл илгээх (reason-тай)
-
-    successResponse(res, 200, 'Profile татгалзагдлаа');
-
-  } catch (error) {
-    next(error);
-  }
-};
-
-// ✅ ШИНЭ: Profile татгалзах
-// @route   PUT /api/admin/profiles/:id/reject
-// @access  Private/Admin
-exports.rejectProfile = async (req, res, next) => {
-  try {
-    const { reason } = req.body;
-
-    const profile = await Profile.findByIdAndDelete(req.params.id);
-
-    if (!profile) {
-      return errorResponse(res, 404, 'Profile олдсонгүй');
-    }
-
-    // TODO: User-т мэдэгдэл илгээх
 
     successResponse(res, 200, 'Profile татгалзагдлаа');
 
@@ -382,25 +374,6 @@ exports.startLoanReview = async (req, res, next) => {
     await loan.save();
 
     successResponse(res, 200, 'Зээлийн шалгалт эхэллээ', { loan });
-
-  } catch (error) {
-    next(error);
-  }
-};
-// Backend: src/controllers/adminController.js-д нэмэх
-
-// @desc    Хэрэглэгчийн хэтэвчний мэдээлэл авах
-// @route   GET /api/admin/users/:id/wallet
-// @access  Private/Admin
-exports.getUserWallet = async (req, res, next) => {
-  try {
-    const wallet = await Wallet.findOne({ user: req.params.id });
-
-    if (!wallet) {
-      return errorResponse(res, 404, 'Хэтэвч олдсонгүй');
-    }
-
-    successResponse(res, 200, 'Хэтэвчний мэдээлэл', { wallet });
 
   } catch (error) {
     next(error);

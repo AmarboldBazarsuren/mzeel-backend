@@ -53,29 +53,32 @@ const profileSchema = new mongoose.Schema({
     detail: String
   },
 
-  // Боловсрол
+  // ✅ ЗАСВАРЛАСАН: Боловсрол - required: false
   education: {
     level: {
       type: String,
       enum: ['middle', 'high', 'vocational', 'bachelor', 'master', 'phd'],
-      required: true
+      required: false, // ✅ Заавал биш болгов
+      default: 'high'
     },
     school: String,
     graduationYear: Number
   },
 
-  // Ажлын мэдээлэл
+  // ✅ ЗАСВАРЛАСАН: Ажлын мэдээлэл - required: false
   employment: {
     status: {
       type: String,
       enum: ['employed', 'self-employed', 'unemployed', 'student', 'retired'],
-      required: true
+      required: false, // ✅ Заавал биш болгов
+      default: 'employed'
     },
     companyName: String,
     position: String,
     monthlyIncome: {
       type: Number,
-      min: 0
+      min: 0,
+      default: 0
     },
     workPhone: String,
     startDate: Date
@@ -97,21 +100,21 @@ const profileSchema = new mongoose.Schema({
     }
   },
 
-  // ✅ ШИНЭ: Зургууд
+  // Зургууд - заавал биш
   idCardFront: {
-    type: String, // Base64 эсвэл URL
-    required: [true, 'Иргэний үнэмлэхний урд тал оруулна уу']
+    type: String,
+    required: false
   },
   idCardBack: {
-    type: String, // Base64 эсвэл URL
-    required: [true, 'Иргэний үнэмлэхний ард тал оруулна уу']
+    type: String,
+    required: false
   },
   selfiePhoto: {
-    type: String, // Base64 эсвэл URL
-    required: [true, 'Selfie зураг оруулна уу']
+    type: String,
+    required: false
   },
 
-  // ✅ ШИНЭ: Зээлийн дээд эрх
+  // Зээлийн дээд эрх
   availableLoanLimit: {
     type: Number,
     default: 0,
@@ -128,6 +131,21 @@ const profileSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
+  
+  // Verification status
+  verificationStatus: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected'],
+    default: 'pending'
+  },
+  
+  // Rejection мэдээлэл
+  rejectedAt: Date,
+  rejectedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  rejectionReason: String,
   
 }, {
   timestamps: true

@@ -10,14 +10,17 @@ const loanSchema = new mongoose.Schema({
   loanNumber: {
     type: String,
     unique: true,
-    required: true
+    // ✅ ЗАСВАРЛАСАН: required: false (pre-save hook-оор автоматаар үүснэ)
+    required: false
   },
   
   // Зээлийн мэдээлэл
   requestedAmount: {
     type: Number,
-    required: true,
-    min: 10000
+    // ✅ ЗАСВАРЛАСАН: required: false, min: 0 (verification үед 0 байна)
+    required: false,
+    min: 0,
+    default: 0
   },
   approvedAmount: {
     type: Number,
@@ -54,26 +57,23 @@ const loanSchema = new mongoose.Schema({
     default: 0
   },
   
-  // Төлөв
+  // ✅ ЗАСВАРЛАСАН: Төлөв - verification_pending -> pending_verification
   status: {
     type: String,
     enum: [
-      'verification_pending',  // Баталгаажуулалт хүлээж байна (3000₮ төлсөн)
-      'under_review',          // Шалгаж байна
-      'approved',              // Зөвшөөрөгдсөн (operator дүн оруулсан)
-      'disbursed',             // Олгогдсон (хэтэвчинд орсон)
-      'active',                // Идэвхтэй (эргэн төлж байгаа)
-      'paid',                  // Төлөгдсөн
-      'overdue',               // Хугацаа хэтэрсэн
-      'defaulted',             // Төлөх чадваргүй
-      'cancelled'              // Цуцлагдсан
+      'pending_verification',  // ✅ Зөв нэр
+      'under_review',
+      'approved',
+      'disbursed',
+      'active',
+      'paid',
+      'overdue',
+      'defaulted',
+      'cancelled'
     ],
-    default: 'verification_pending'
+    default: 'pending_verification'
   },
-  verificationFeePaid: {
-    type: Boolean,
-    default: false
-  },
+  
   // Огноо
   applicationDate: {
     type: Date,
@@ -112,15 +112,16 @@ const loanSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Зээлийн дугаар автоматаар үүсгэх
+// ✅ ЗАСВАРЛАСАН: Зээлийн дугаар автоматаар үүсгэх
 loanSchema.pre('save', async function(next) {
+  // Зээлийн дугаар байхгүй бол үүсгэх
   if (!this.loanNumber) {
     const count = await mongoose.model('Loan').countDocuments();
     this.loanNumber = `MZ${new Date().getFullYear()}${String(count + 1).padStart(6, '0')}`;
   }
   
-  // Нийт төлөх дүн тооцоолох
-  if (this.approvedAmount && !this.totalRepayment) {
+  // Нийт төлөх дүн тооцоолох (зөвхөн approvedAmount байвал)
+  if (this.approvedAmount > 0 && !this.totalRepayment) {
     this.totalRepayment = Math.round(this.approvedAmount * (1 + this.interestRate / 100));
     this.remainingAmount = this.totalRepayment;
   }

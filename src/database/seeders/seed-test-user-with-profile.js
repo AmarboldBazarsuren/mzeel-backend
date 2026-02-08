@@ -115,8 +115,8 @@ async function seedTestUserWithProfile() {
     console.log('='.repeat(70));
     
     console.log('\n📱 НЭВТРЭХ МЭДЭЭЛЭЛ:');
-    console.log('   Утас:      77777777');
-    console.log('   Email:     test3000@mzeel.mn');
+    console.log('   Утас:      00000000');
+    console.log('   Email:     test3000@mzeeel.mn');
     console.log('   Нууц үг:   Test@123');
     console.log('   💰 Хэтэвч:  3,000₮');
     
