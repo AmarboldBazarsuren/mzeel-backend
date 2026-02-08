@@ -1,0 +1,407 @@
+const Loan = require('../models/Loan');
+const Wallet = require('../models/Wallet');
+const Transaction = require('../models/Transaction');
+const Profile = require('../models/Profile');
+const { successResponse, errorResponse, generateLoanNumber } = require('../utils/helpers');
+const logger = require('../utils/logger');
+
+// @desc    Зээлийн мэдээлэл баталгаажуулах (3000₮ төлөх)
+// @route   POST /api/loans/verify
+// @access  Private
+exports.verifyLoan = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const verificationFee = parseInt(process.env.VERIFICATION_FEE) || 3000;
+
+    // Profile шалгах
+    const profile = await Profile.findOne({ user: userId });
+    if (!profile) {
+      return errorResponse(res, 400, 'Эхлээд хувийн мэдээллээ бөглөнө үү');
+    }
+
+    // Идэвхтэй зээл байгаа эсэх шалгах
+    const activeLoans = await Loan.find({
+      user: userId,
+      status: { $in: ['pending_verification', 'under_review', 'approved', 'disbursed', 'active', 'overdue'] }
+    });
+
+    if (activeLoans.length > 0) {
+      return errorResponse(res, 400, 'Та идэвхтэй зээлтэй байна. Эхлээд төлөх шаардлагатай.');
+    }
+
+    // Хэтэвч шалгах
+    const wallet = await Wallet.findOne({ user: userId });
+    if (!wallet.hasBalance(verificationFee)) {
+      return errorResponse(res, 400, `Хэтэвчний үлдэгдэл хүрэлцэхгүй байна. ${verificationFee}₮ цэнэглэнэ үү.`);
+    }
+
+    // Баталгаажуулалтын төлбөр төлөх
+    wallet.deductBalance(verificationFee);
+    await wallet.save();
+
+    // Transaction үүсгэх
+    const transaction = await Transaction.create({
+      user: userId,
+      wallet: wallet._id,
+      type: 'verification_fee',
+      amount: verificationFee,
+      balanceBefore: wallet.balance + verificationFee,
+      balanceAfter: wallet.balance,
+      status: 'completed',
+      description: 'Зээлийн мэдээлэл баталгаажуулах төлбөр',
+      processedAt: new Date()
+    });
+
+    // Зээлийн хүсэлт үүсгэх
+    const loan = await Loan.create({
+      user: userId,
+      requestedAmount: 0, // Одоохондоо 0
+      verificationFee,
+      verificationPaid: true,
+      verificationPaidAt: new Date(),
+      verificationTransaction: transaction._id,
+      status: 'pending_verification'
+    });
+
+    logger.info(`Verification fee төлөгдлөө: User ${userId}, Loan ${loan._id}`);
+
+    successResponse(res, 201, 'Баталгаажуулалтын төлбөр амжилттай төлөгдлөө. Таны зээлийн мэдээллийг шалгаж байна.', {
+      loan: {
+        id: loan._id,
+        loanNumber: loan.loanNumber,
+        status: loan.status,
+        verificationPaid: loan.verificationPaid,
+        verificationPaidAt: loan.verificationPaidAt
+      },
+      transaction
+    });
+
+  } catch (error) {
+    logger.error(`Verification error: ${error.message}`);
+    next(error);
+  }
+};
+
+// @desc    Зээл авах (approved болсны дараа)
+// @route   POST /api/loans/request
+// @access  Private
+exports.requestLoan = async (req, res, next) => {
+  try {
+    const { amount } = req.body;
+    const userId = req.user.id;
+
+    // Зээлийн хүсэлт олох
+    const loan = await Loan.findOne({
+      user: userId,
+      status: 'approved'
+    });
+
+    if (!loan) {
+      return errorResponse(res, 400, 'Зөвшөөрөгдсөн зээл олдсонгүй. Эхлээд баталгаажуулалт хийнэ үү.');
+    }
+
+    // Дүн шалгах
+    if (amount < 1000 || amount > loan.approvedAmount) {
+      return errorResponse(res, 400, `Зээлийн дүн 1,000₮ - ${loan.approvedAmount}₮ хооронд байх ёстой`);
+    }
+
+    // Хэтэвч авах
+    const wallet = await Wallet.findOne({ user: userId });
+
+    // Зээл олгох
+    loan.disbursedAmount = amount;
+    loan.totalRepayment = Math.round(amount * (1 + loan.interestRate / 100));
+    loan.remainingAmount = loan.totalRepayment;
+    loan.dueDate = new Date(Date.now() + loan.term * 24 * 60 * 60 * 1000);
+    loan.status = 'disbursed';
+    loan.disbursedAt = new Date();
+    await loan.save();
+
+    // Хэтэвчинд мөнгө нэмэх
+    wallet.addBalance(amount);
+    await wallet.save();
+
+    // Transaction үүсгэх
+    const transaction = await Transaction.create({
+      user: userId,
+      wallet: wallet._id,
+      type: 'loan_disbursement',
+      amount,
+      balanceBefore: wallet.balance - amount,
+      balanceAfter: wallet.balance,
+      status: 'completed',
+      description: `Зээл олгох - ${loan.loanNumber}`,
+      loan: loan._id,
+      processedAt: new Date()
+    });
+
+    logger.info(`Зээл олгогдлоо: ${loan.loanNumber}, Amount: ${amount}`);
+
+    successResponse(res, 200, 'Зээл амжилттай олгогдлоо', {
+      loan,
+      transaction,
+      wallet
+    });
+
+  } catch (error) {
+    logger.error(`Loan request error: ${error.message}`);
+    next(error);
+  }
+};
+
+// @desc    Миний зээлүүд
+// @route   GET /api/loans/my-loans
+// @access  Private
+exports.getMyLoans = async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const query = { user: req.user.id };
+    
+    if (req.query.status) {
+      query.status = req.query.status;
+    }
+
+    const total = await Loan.countDocuments(query);
+    const loans = await Loan.find(query)
+      .sort('-createdAt')
+      .skip(skip)
+      .limit(limit);
+
+    // Статистик
+    const stats = {
+      total: await Loan.countDocuments({ user: req.user.id }),
+      active: await Loan.countDocuments({ user: req.user.id, status: 'active' }),
+      paid: await Loan.countDocuments({ user: req.user.id, status: 'paid' }),
+      overdue: await Loan.countDocuments({ user: req.user.id, status: 'overdue' })
+    };
+
+    successResponse(res, 200, 'Миний зээлүүд', {
+      loans,
+      stats,
+      pagination: {
+        total,
+        page,
+        pages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Зээлийн дэлгэрэнгүй
+// @route   GET /api/loans/:id
+// @access  Private
+exports.getLoanDetails = async (req, res, next) => {
+  try {
+    const loan = await Loan.findById(req.params.id)
+      .populate('user', 'firstName lastName phone email')
+      .populate('approvedBy', 'firstName lastName')
+      .populate('verificationTransaction');
+
+    if (!loan) {
+      return errorResponse(res, 404, 'Зээл олдсонгүй');
+    }
+
+    // Зөвхөн өөрийн зээл харах
+    if (loan.user._id.toString() !== req.user.id && req.user.role !== 'admin') {
+      return errorResponse(res, 403, 'Эрх хүрэхгүй байна');
+    }
+
+    successResponse(res, 200, 'Зээлийн дэлгэрэнгүй', { loan });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Зээл төлөх
+// @route   POST /api/loans/:id/pay
+// @access  Private
+exports.payLoan = async (req, res, next) => {
+  try {
+    const { amount } = req.body;
+    const loan = await Loan.findById(req.params.id);
+
+    if (!loan) {
+      return errorResponse(res, 404, 'Зээл олдсонгүй');
+    }
+
+    if (loan.user.toString() !== req.user.id) {
+      return errorResponse(res, 403, 'Эрх хүрэхгүй байна');
+    }
+
+    if (loan.status !== 'disbursed' && loan.status !== 'active' && loan.status !== 'overdue') {
+      return errorResponse(res, 400, 'Энэ зээлийг төлөх боломжгүй');
+    }
+
+    // Хэтэвч шалгах
+    const wallet = await Wallet.findOne({ user: req.user.id });
+    if (!wallet.hasBalance(amount)) {
+      return errorResponse(res, 400, 'Хэтэвчний үлдэгдэл хүрэлцэхгүй байна');
+    }
+
+    // Төлөх дүн их байвал
+    if (amount > loan.remainingAmount) {
+      return errorResponse(res, 400, `Хэт их дүн оруулсан. Үлдэгдэл: ${loan.remainingAmount}₮`);
+    }
+
+    // Хэтэвчээс хасах
+    wallet.deductBalance(amount);
+    await wallet.save();
+
+    // Зээл шинэчлэх
+    loan.paidAmount += amount;
+    loan.remainingAmount -= amount;
+
+    if (loan.remainingAmount === 0) {
+      loan.status = 'paid';
+      loan.paidAt = new Date();
+    } else {
+      loan.status = 'active';
+    }
+
+    await loan.save();
+
+    // Transaction үүсгэх
+    const transaction = await Transaction.create({
+      user: req.user.id,
+      wallet: wallet._id,
+      type: 'loan_payment',
+      amount,
+      balanceBefore: wallet.balance + amount,
+      balanceAfter: wallet.balance,
+      status: 'completed',
+      description: `Зээл төлөлт - ${loan.loanNumber}`,
+      loan: loan._id,
+      processedAt: new Date()
+    });
+
+    logger.info(`Зээл төлөгдлөө: ${loan.loanNumber}, Amount: ${amount}`);
+
+    successResponse(res, 200, 'Төлбөр амжилттай төлөгдлөө', {
+      loan,
+      transaction,
+      wallet
+    });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Бүх зээл (Admin)
+// @route   GET /api/loans/admin/all
+// @access  Private/Admin
+exports.getAllLoans = async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const query = {};
+    if (req.query.status) query.status = req.query.status;
+
+    const total = await Loan.countDocuments(query);
+    const loans = await Loan.find(query)
+      .populate('user', 'firstName lastName phone email')
+      .populate('approvedBy', 'firstName lastName')
+      .sort('-createdAt')
+      .skip(skip)
+      .limit(limit);
+
+    // Статистик
+    const stats = await Loan.aggregate([
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 },
+          totalAmount: { $sum: '$disbursedAmount' }
+        }
+      }
+    ]);
+
+    successResponse(res, 200, 'Бүх зээл', {
+      loans,
+      stats,
+      pagination: {
+        total,
+        page,
+        pages: Math.ceil(total / limit)
+      }
+    });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Зээл зөвшөөрөх (Admin/Operator)
+// @route   PUT /api/loans/:id/approve
+// @access  Private/Admin
+exports.approveLoan = async (req, res, next) => {
+  try {
+    const { approvedAmount } = req.body;
+    const loan = await Loan.findById(req.params.id);
+
+    if (!loan) {
+      return errorResponse(res, 404, 'Зээл олдсонгүй');
+    }
+
+    if (loan.status !== 'pending_verification' && loan.status !== 'under_review') {
+      return errorResponse(res, 400, 'Энэ зээлийг зөвшөөрөх боломжгүй');
+    }
+
+    if (!approvedAmount || approvedAmount < 10000 || approvedAmount > 500000) {
+      return errorResponse(res, 400, 'Зөвшөөрөгдөх дүн 10,000₮ - 500,000₮ хооронд байх ёстой');
+    }
+
+    loan.approvedAmount = approvedAmount;
+    loan.status = 'approved';
+    loan.approvedAt = new Date();
+    loan.approvedBy = req.user.id;
+    loan.adminNotes = req.body.notes || '';
+    await loan.save();
+
+    await loan.populate('user', 'firstName lastName phone email');
+
+    logger.info(`Зээл зөвшөөрөгдлөө: ${loan.loanNumber}, Amount: ${approvedAmount} by ${req.user.email}`);
+
+    successResponse(res, 200, 'Зээл амжилттай зөвшөөрөгдлөө', { loan });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Зээл татгалзах (Admin)
+// @route   PUT /api/loans/:id/reject
+// @access  Private/Admin
+exports.rejectLoan = async (req, res, next) => {
+  try {
+    const { reason } = req.body;
+    const loan = await Loan.findById(req.params.id);
+
+    if (!loan) {
+      return errorResponse(res, 404, 'Зээл олдсонгүй');
+    }
+
+    loan.status = 'cancelled';
+    loan.rejectionReason = reason;
+    await loan.save();
+
+    // Баталгаажуулалтын төлбөр буцаах эсэхийг шийдэх (optional)
+    // ... буцаах код ...
+
+    logger.info(`Зээл татгалзагдлаа: ${loan.loanNumber} by ${req.user.email}`);
+
+    successResponse(res, 200, 'Зээл татгалзагдлаа', { loan });
+
+  } catch (error) {
+    next(error);
+  }
+};
