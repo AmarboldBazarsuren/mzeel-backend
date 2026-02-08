@@ -425,10 +425,10 @@ exports.approveLoan = async (req, res) => {
     }
 
     // ✅ Validation - Зээлийн дүн шалгах
-    if (!approvedAmount || approvedAmount < 10000 || approvedAmount > 500000) {
+    if (!approvedAmount || approvedAmount < 10000 || approvedAmount > 5000000) {
       return res.status(400).json({
         success: false,
-        message: 'Зээлийн дүн 10,000₮ - 500,000₮ хооронд байх ёстой'
+        message: 'Зээлийн дүн 10,000₮ - 5,000,000₮ хооронд байх ёстой'
       });
     }
 

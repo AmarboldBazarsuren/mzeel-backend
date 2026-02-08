@@ -112,8 +112,8 @@ const loanSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// ✅ ЗАСВАРЛАСАН: Зээлийн дугаар автоматаар үүсгэх
-loanSchema.pre('save', async function(next) {
+// ✅ ЗАСВАРЛАСАН: next() устгасан - async function-д шаардлагагүй
+loanSchema.pre('save', async function() {
   // Зээлийн дугаар байхгүй бол үүсгэх
   if (!this.loanNumber) {
     const count = await mongoose.model('Loan').countDocuments();
@@ -125,8 +125,6 @@ loanSchema.pre('save', async function(next) {
     this.totalRepayment = Math.round(this.approvedAmount * (1 + this.interestRate / 100));
     this.remainingAmount = this.totalRepayment;
   }
-  
-  next();
 });
 
 module.exports = mongoose.model('Loan', loanSchema);

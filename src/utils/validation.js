@@ -50,8 +50,8 @@ exports.profileValidation = [
 exports.loanValidation = [
   body('amount')
     .isNumeric()
-    .custom((value) => value >= 10000 && value <= 500000)
-    .withMessage('Зээлийн дүн 10,000₮ - 500,000₮ хооронд байх ёстой'),
+    .custom((value) => value >= 10000 && value <= 5000000)
+    .withMessage('Зээлийн дүн 10,000₮ - 5,000,000₮ хооронд байх ёстой'),
   body('purpose')
     .optional()
     .trim()
