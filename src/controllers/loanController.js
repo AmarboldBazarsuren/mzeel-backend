@@ -5,9 +5,39 @@ const Profile = require('../models/Profile');
 const { successResponse, errorResponse, generateLoanNumber } = require('../utils/helpers');
 const logger = require('../utils/logger');
 
-// @desc    Зээлийн мэдээлэл баталгаажуулах (3000₮ төлөх)
-// @route   POST /api/loans/verify
-// @access  Private
+// ===== ХҮҮ ТООЦОХ ФУНКЦҮҮД =====
+
+// Зээлийн хүү тооцох функц
+const calculateInterestRate = (termDays) => {
+  if (termDays === 14) {
+    return 2.8; // 14 хоног - 2.8%
+  } else if (termDays === 30) {
+    return 3.2; // 1 сар - 3.2%
+  } else if (termDays === 90) {
+    return 3.8; // 3 сар - 3.8%
+  }
+  return 3.2; // Default 1 сар
+};
+
+// Нийт төлөх дүн тооцох функц
+const calculateTotalAmount = (principal, termDays) => {
+  const interestRate = calculateInterestRate(termDays);
+  const interest = Math.round(principal * (interestRate / 100));
+  return {
+    principal,
+    interestRate,
+    interest,
+    totalAmount: principal + interest,
+  };
+};
+
+// Хугацаа тооцох функц
+const calculateDueDate = (startDate, termDays) => {
+  const dueDate = new Date(startDate);
+  dueDate.setDate(dueDate.getDate() + termDays);
+  return dueDate;
+};
+
 // @desc    Зээлийн мэдээлэл баталгаажуулах (3000₮ төлөх)
 // @route   POST /api/loans/verify
 // @access  Private
@@ -113,9 +143,6 @@ exports.verifyLoan = async (req, res, next) => {
 // @desc    Зээл авах (approved болсны дараа)
 // @route   POST /api/loans/request
 // @access  Private
-// @desc    Зээл авах (approved болсны дараа)
-// @route   POST /api/loans/request
-// @access  Private
 exports.requestLoan = async (req, res, next) => {
   try {
     const { amount } = req.body;
@@ -192,12 +219,13 @@ exports.requestLoan = async (req, res, next) => {
     });
   }
 };
-// ✅ ШИНЭ: Зөвшөөрсөн зээлээс мөнгө авах
+
+// @desc    Зөвшөөрсөн зээлээс мөнгө авах (termDays параметртай)
 // @route   POST /api/loans/request-approved
 // @access  Private
 exports.requestApprovedLoan = async (req, res) => {
   try {
-    const { amount } = req.body;
+    const { amount, termDays = 30 } = req.body; // ✅ termDays параметр нэмэх
     const userId = req.user.id;
 
     // 1. Profile шалгах
@@ -231,28 +259,44 @@ exports.requestApprovedLoan = async (req, res) => {
       });
     }
 
-    // 3. Идэвхтэй зээл байгаа эсэхийг шалгах
-   
+    // ✅ termDays validation
+    if (![14, 30, 90].includes(termDays)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Хугацаа 14, 30, эсвэл 90 хоног байх ёстой'
+      });
+    }
+
+    // ✅ Хүү болон нийт дүн тооцох
+    const calculation = calculateTotalAmount(amount, termDays);
+    const dueDate = calculateDueDate(new Date(), termDays);
 
     // 4. Шинэ зээл үүсгэх (pending_disbursement төлөвтэй)
     const loan = await Loan.create({
       user: userId,
       requestedAmount: amount,
       approvedAmount: amount,
-      interestRate: 5,
-      term: 30,
-      totalRepayment: Math.round(amount * 1.05),
-      remainingAmount: Math.round(amount * 1.05),
-      status: 'pending_disbursement', // Админ зөвшөөрөхийг хүлээнэ
-      dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+      termDays, // ✅ ШИНЭ
+      interestRate: calculation.interestRate, // ✅ ШИНЭ - хугацаанаас хамааруулсан хүү
+      interest: calculation.interest, // ✅ ШИНЭ
+      totalAmount: calculation.totalAmount, // ✅ ШИНЭ
+      totalRepayment: calculation.totalAmount, // Хуучин field-тай compatibility
+      remainingAmount: calculation.totalAmount,
+      status: 'pending_disbursement',
+      dueDate
     });
 
-    console.log(`✅ Зээлийн хүсэлт үүсгэгдлээ: ${loan.loanNumber}, Amount: ${amount}`);
+    console.log(`✅ Зээлийн хүсэлт үүсгэгдлээ: ${loan.loanNumber}, Amount: ${amount}, Term: ${termDays} days`);
 
     return res.status(201).json({
       success: true,
       message: 'Зээлийн хүсэлт илгээгдлээ. Админ зөвшөөрнө.',
-      data: { loan }
+      data: {
+        loan: {
+          ...loan.toObject(),
+          calculation
+        }
+      }
     });
 
   } catch (error) {
@@ -264,7 +308,7 @@ exports.requestApprovedLoan = async (req, res) => {
   }
 };
 
-// ✅ ШИНЭ: Админ зээл олгох хүсэлтийг зөвшөөрөх
+// @desc    Админ зээл олгох хүсэлтийг зөвшөөрөх
 // @route   PUT /api/loans/:id/approve-disbursement
 // @access  Private/Admin
 exports.approveLoanDisbursement = async (req, res) => {
@@ -284,6 +328,12 @@ exports.approveLoanDisbursement = async (req, res) => {
         message: 'Зөвхөн pending_disbursement төлөвтэй зээлийг зөвшөөрч болно'
       });
     }
+
+    // ✅ Хүү болон нийт дүн дахин тооцох (бататгаах)
+    const calculation = calculateTotalAmount(
+      loan.approvedAmount,
+      loan.termDays || 30
+    );
 
     // 1. Хэтэвчинд мөнгө нэмэх
     const wallet = await Wallet.findOne({ user: loan.user });
@@ -309,10 +359,21 @@ exports.approveLoanDisbursement = async (req, res) => {
     profile.availableLoanLimit -= loan.approvedAmount;
     await profile.save();
 
-    // 4. Зээлийн төлөв өөрчлөх
+    // 4. Зээлийн төлөв өөрчлөх + хүү тооцоолол шинэчлэх
     loan.disbursedAmount = loan.approvedAmount;
+    loan.interestRate = calculation.interestRate; // ✅ ШИНЭ
+    loan.interest = calculation.interest; // ✅ ШИНЭ
+    loan.totalAmount = calculation.totalAmount; // ✅ ШИНЭ
+    loan.totalRepayment = calculation.totalAmount;
+    loan.remainingAmount = calculation.totalAmount;
     loan.status = 'disbursed';
     loan.disbursedAt = new Date();
+    
+    // ✅ Due date тооцох
+    if (!loan.dueDate) {
+      loan.dueDate = calculateDueDate(loan.disbursedAt, loan.termDays || 30);
+    }
+    
     await loan.save();
 
     console.log(`✅ Зээл олгогдлоо: ${loan.loanNumber}, Amount: ${loan.approvedAmount}`);
@@ -331,6 +392,7 @@ exports.approveLoanDisbursement = async (req, res) => {
     });
   }
 };
+
 // @desc    Миний зээлүүд
 // @route   GET /api/loans/my-loans
 // @access  Private
@@ -404,8 +466,6 @@ exports.getLoanDetails = async (req, res, next) => {
 // @desc    Зээл төлөх
 // @route   POST /api/loans/:id/pay
 // @access  Private
-// Backend: src/controllers/loanController.js - payLoan function
-
 exports.payLoan = async (req, res, next) => {
   try {
     const { amount } = req.body;
@@ -423,7 +483,7 @@ exports.payLoan = async (req, res, next) => {
       return errorResponse(res, 400, 'Энэ зээлийг төлөх боломжгүй');
     }
 
-    // ✅ Хэтэвч шалгах
+    // Хэтэвч шалгах
     const wallet = await Wallet.findOne({ user: req.user.id });
     if (!wallet.hasBalance(amount)) {
       return errorResponse(res, 400, 'Хэтэвчний үлдэгдэл хүрэлцэхгүй байна. Эхлээд хэтэвчээ цэнэглэнэ үү.');
@@ -434,9 +494,9 @@ exports.payLoan = async (req, res, next) => {
       return errorResponse(res, 400, `Хэт их дүн оруулсан. Үлдэгдэл: ${loan.remainingAmount}₮`);
     }
 
-    // ✅ Хэтэвчээс хасах (зарцуулалт болгох)
+    // Хэтэвчээс хасах
     wallet.balance -= amount;
-    wallet.totalSpent += amount; // Зээл төлөлт = зарцуулалт
+    wallet.totalSpent += amount;
     wallet.lastTransactionAt = new Date();
     await wallet.save();
 
@@ -467,11 +527,11 @@ exports.payLoan = async (req, res, next) => {
       processedAt: new Date()
     });
 
-    // ✅ Profile-ийн зээлийн эрх буцааж нэмэх
+    // Profile-ийн зээлийн эрх буцааж нэмэх
     if (loan.status === 'paid') {
       const profile = await Profile.findOne({ user: req.user.id });
       if (profile) {
-        profile.availableLoanLimit += loan.disbursedAmount; // Төлсөн дүнгээр эрх нэмэх
+        profile.availableLoanLimit += loan.disbursedAmount;
         await profile.save();
       }
     }
@@ -486,6 +546,105 @@ exports.payLoan = async (req, res, next) => {
 
   } catch (error) {
     next(error);
+  }
+};
+
+// ===== ШИНЭ: Зээл сунгах функц =====
+// @desc    Зээл сунгах
+// @route   POST /api/loans/:id/extend
+// @access  Private
+exports.extendLoan = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    const loan = await Loan.findById(id);
+    if (!loan) {
+      return res.status(404).json({
+        success: false,
+        message: 'Зээл олдсонгүй'
+      });
+    }
+
+    // Зээлийн эзэн эсэхийг шалгах
+    if (loan.user.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Танд энэ зээлийг сунгах эрх байхгүй'
+      });
+    }
+
+    // Зээлийн төлөв шалгах
+    if (!['disbursed', 'active', 'overdue'].includes(loan.status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Зөвхөн идэвхтэй зээлийг сунгаж болно'
+      });
+    }
+
+    // 14 хоногийн зээлийг сунгаж болохгүй
+    if (loan.termDays === 14) {
+      return res.status(400).json({
+        success: false,
+        message: '14 хоногийн зээлийг сунгах боломжгүй'
+      });
+    }
+
+    // Сунгах хугацаа тооцох (анхны хугацаатай ижил)
+    const extensionDays = loan.termDays || 30;
+    
+    // Хүүгийн дүн тооцох (зөвхөн үндсэн дүн дээр)
+    const extensionInterest = Math.round(
+      loan.disbursedAmount * (loan.interestRate / 100)
+    );
+
+    // Шинэ дуусах хугацаа тооцох
+    const newDueDate = new Date(loan.dueDate);
+    newDueDate.setDate(newDueDate.getDate() + extensionDays);
+
+    // Loan-ийн мэдээлэл шинэчлэх
+    loan.extensionCount = (loan.extensionCount || 0) + 1;
+    loan.dueDate = newDueDate;
+    loan.remainingAmount += extensionInterest;
+    loan.totalAmount = (loan.totalAmount || loan.totalRepayment) + extensionInterest;
+    loan.totalRepayment = loan.totalAmount; // Compatibility
+    loan.lastExtendedAt = new Date();
+
+    await loan.save();
+
+    // Extension түүх хадгалах
+    await Transaction.create({
+      user: userId,
+      wallet: (await Wallet.findOne({ user: userId }))?._id,
+      type: 'loan_extension',
+      amount: extensionInterest,
+      status: 'completed',
+      description: `Зээл сунгалт (${extensionDays} хоног): ${loan.loanNumber}`,
+      loan: loan._id,
+      processedAt: new Date()
+    });
+
+    console.log(`✅ Зээл сунгагдлаа: ${loan.loanNumber}, Extension: ${extensionDays} days, Interest: ${extensionInterest}`);
+
+    res.json({
+      success: true,
+      message: `Зээл амжилттай ${extensionDays} хоногоор сунгагдлаа`,
+      data: {
+        loan,
+        extensionDetails: {
+          extensionDays,
+          extensionInterest,
+          newDueDate,
+          newRemainingAmount: loan.remainingAmount,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('Extend loan error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Зээл сунгах явцад алдаа гарлаа',
+    });
   }
 };
 
@@ -538,14 +697,9 @@ exports.getAllLoans = async (req, res, next) => {
 // @desc    Зээл зөвшөөрөх (Admin/Operator)
 // @route   PUT /api/loans/:id/approve
 // @access  Private/Admin
-// Backend: src/controllers/loanController.js
-
-
-// Backend: src/controllers/loanController.js - approveLoan function
-
 exports.approveLoan = async (req, res) => {
   try {
-    const { approvedAmount } = req.body; // ✅ Админ зээлийн дүнг тогтооно
+    const { approvedAmount } = req.body;
     const loan = await Loan.findById(req.params.id);
     
     if (!loan) {
@@ -562,7 +716,7 @@ exports.approveLoan = async (req, res) => {
       });
     }
 
-    // ✅ Validation - Зээлийн дүн шалгах
+    // Validation - Зээлийн дүн шалгах
     if (!approvedAmount || approvedAmount < 10000 || approvedAmount > 5000000) {
       return res.status(400).json({
         success: false,
@@ -570,10 +724,7 @@ exports.approveLoan = async (req, res) => {
       });
     }
 
-    // ✅ Profile-ийн зээлийн эрхээс их эсэхийг шалгахгүй
-    // Учир нь admin-д зээлийн хэмжээг тогтоох эрх байна
-
-    // ✅ Зээл зөвшөөрөх
+    // Зээл зөвшөөрөх
     loan.approvedAmount = approvedAmount;
     loan.status = 'approved';
     loan.approvedAt = Date.now();
@@ -585,7 +736,7 @@ exports.approveLoan = async (req, res) => {
     
     await loan.save();
 
-    // ✅ Profile-д зээлийн эрх нэмэх (admin тогтоосон дүнгээр)
+    // Profile-д зээлийн эрх нэмэх
     const profile = await Profile.findOne({ user: loan.user });
     if (profile) {
       profile.availableLoanLimit = approvedAmount;
@@ -621,9 +772,6 @@ exports.rejectLoan = async (req, res, next) => {
     loan.rejectionReason = reason;
     await loan.save();
 
-    // Баталгаажуулалтын төлбөр буцаах эсэхийг шийдэх (optional)
-    // ... буцаах код ...
-
     logger.info(`Зээл татгалзагдлаа: ${loan.loanNumber} by ${req.user.email}`);
 
     successResponse(res, 200, 'Зээл татгалзагдлаа', { loan });
@@ -632,6 +780,10 @@ exports.rejectLoan = async (req, res, next) => {
     next(error);
   }
 };
+
+// @desc    Шалгуулах хүсэлт үүсгэх
+// @route   POST /api/loans/request-verification
+// @access  Private
 exports.requestVerification = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -649,8 +801,8 @@ exports.requestVerification = async (req, res) => {
     // 2. Хэдийнэ шалгуулж байгаа эсэхийг шалгах
     const existingRequest = await Loan.findOne({
       user: userId,
-      status: 'verification_pending', // Шинэ төлөв
-      verificationFeePaid: true
+      status: 'pending_verification',
+      verificationPaid: true
     });
 
     if (existingRequest) {
@@ -668,21 +820,23 @@ exports.requestVerification = async (req, res) => {
     // 4. Transaction үүсгэх
     await Transaction.create({
       user: userId,
+      wallet: wallet._id,
       type: 'loan_verification_fee',
       amount: VERIFICATION_FEE,
       status: 'completed',
-      description: 'Зээлийн мэдээлэл шалгуулах төлбөр'
+      description: 'Зээлийн мэдээлэл шалгуулах төлбөр',
+      processedAt: new Date()
     });
 
-    // 5. Loan request үүсгэх (verification_pending)
+    // 5. Loan request үүсгэх
     const loanRequest = await Loan.create({
       user: userId,
-      status: 'verification_pending', // ✅ Шинэ төлөв
-      verificationFeePaid: true,
+      status: 'pending_verification',
+      verificationPaid: true,
       verificationPaidAt: new Date(),
-      requestedAmount: 0, // Админ тогтооно
+      requestedAmount: 0,
       purpose: 'Зээлийн эрх авах',
-      repaymentMonths: 1 // Default
+      term: 30
     });
 
     res.json({
@@ -701,8 +855,9 @@ exports.requestVerification = async (req, res) => {
     });
   }
 };
-// ✅ ADMIN: Зээл шалгуулах хүсэлтүүд
-// @route   GET /api/admin/loans/verification-pending
+
+// @desc    ADMIN: Зээл шалгуулах хүсэлтүүд
+// @route   GET /api/loans/verification-pending
 // @access  Private/Admin
 exports.getPendingVerificationLoans = async (req, res) => {
   try {
@@ -711,8 +866,8 @@ exports.getPendingVerificationLoans = async (req, res) => {
     const skip = (page - 1) * limit;
 
     const loans = await Loan.find({
-      status: 'verification_pending',
-      verificationFeePaid: true
+      status: 'pending_verification',
+      verificationPaid: true
     })
       .populate('user', 'firstName lastName email phone')
       .sort({ verificationPaidAt: -1 })
@@ -720,8 +875,8 @@ exports.getPendingVerificationLoans = async (req, res) => {
       .limit(limit);
 
     const total = await Loan.countDocuments({
-      status: 'verification_pending',
-      verificationFeePaid: true
+      status: 'pending_verification',
+      verificationPaid: true
     });
 
     res.json({
@@ -745,8 +900,8 @@ exports.getPendingVerificationLoans = async (req, res) => {
   }
 };
 
-// ✅ ADMIN: Шалгалт эхлүүлэх
-// @route   PUT /api/admin/loans/:id/start-review
+// @desc    ADMIN: Шалгалт эхлүүлэх
+// @route   PUT /api/loans/:id/start-review
 // @access  Private/Admin
 exports.startLoanReview = async (req, res) => {
   try {
@@ -759,14 +914,14 @@ exports.startLoanReview = async (req, res) => {
       });
     }
 
-    if (loan.status !== 'verification_pending') {
+    if (loan.status !== 'pending_verification') {
       return res.status(400).json({
         success: false,
-        message: 'Зөвхөн verification_pending төлөвтэй зээлийг шалгаж болно'
+        message: 'Зөвхөн pending_verification төлөвтэй зээлийг шалгаж болно'
       });
     }
 
-    loan.status = 'under_review'; // ✅ Шалгаж байна
+    loan.status = 'under_review';
     loan.reviewStartedAt = new Date();
     loan.reviewedBy = req.user.id;
     await loan.save();
@@ -786,9 +941,3 @@ exports.startLoanReview = async (req, res) => {
 };
 
 module.exports = exports;
-
-
-
-
-
-

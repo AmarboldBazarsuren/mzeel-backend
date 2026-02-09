@@ -10,14 +10,12 @@ const loanSchema = new mongoose.Schema({
   loanNumber: {
     type: String,
     unique: true,
-    // ✅ ЗАСВАРЛАСАН: required: false (pre-save hook-оор автоматаар үүснэ)
-    required: false
+    required: false // pre-save hook-оор автоматаар үүснэ
   },
   
-  // Зээлийн мэдээлэл
+  // ===== Зээлийн мэдээлэл =====
   requestedAmount: {
     type: Number,
-    // ✅ ЗАСВАРЛАСАН: required: false, min: 0 (verification үед 0 байна)
     required: false,
     min: 0,
     default: 0
@@ -31,19 +29,33 @@ const loanSchema = new mongoose.Schema({
     default: 0
   },
   
+  // ===== ХҮҮ БОЛОН ХУГАЦАА (ШИНЭ) =====
+  termDays: {
+    type: Number,
+    default: 30, // 14, 30, эсвэл 90
+    enum: [14, 30, 90],
+  },
   interestRate: {
     type: Number,
-    default: 5, // 5% хүү
-    min: 0
+    default: 3.2, // Percentage (2.8, 3.2, 3.8)
+  },
+  interest: {
+    type: Number,
+    default: 0, // Тооцоолсон хүүгийн дүн
+  },
+  totalAmount: {
+    type: Number,
+    default: 0, // Нийт төлөх = principal + interest (ШИНЭ)
   },
   
+  // ===== Хуучин field (compatibility) =====
   term: {
     type: Number,
-    default: 30, // 30 хоног
+    default: 30,
     required: true
   },
   
-  // Төлбөрийн мэдээлэл
+  // ===== Төлбөрийн мэдээлэл =====
   totalRepayment: {
     type: Number,
     default: 0
@@ -57,14 +69,23 @@ const loanSchema = new mongoose.Schema({
     default: 0
   },
   
-  // ✅ ЗАСВАРЛАСАН: Төлөв - verification_pending -> pending_verification
+  // ===== СУНГАЛТ (ШИНЭ) =====
+  extensionCount: {
+    type: Number,
+    default: 0, // Хэдэн удаа сунгасан
+  },
+  lastExtendedAt: {
+    type: Date, // Сүүлд сунгасан огноо
+  },
+  
+  // ===== Төлөв =====
   status: {
     type: String,
     enum: [
       'pending_verification',  
       'under_review',
       'approved',
-      'pending_disbursement',
+      'pending_disbursement', 
       'disbursed',
       'active',
       'paid',
@@ -75,7 +96,7 @@ const loanSchema = new mongoose.Schema({
     default: 'pending_verification'
   },
   
-  // Огноо
+  // ===== Огноо =====
   applicationDate: {
     type: Date,
     default: Date.now
@@ -89,8 +110,13 @@ const loanSchema = new mongoose.Schema({
   disbursedAt: Date,
   dueDate: Date,
   paidAt: Date,
+  reviewStartedAt: Date,
+  reviewedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
   
-  // Баталгаажуулалтын төлбөр
+  // ===== Баталгаажуулалтын төлбөр =====
   verificationFee: {
     type: Number,
     default: 3000
@@ -104,7 +130,7 @@ const loanSchema = new mongoose.Schema({
     ref: 'Transaction'
   },
   
-  // Тайлбар
+  // ===== Тайлбар =====
   purpose: String,
   adminNotes: String,
   rejectionReason: String,
@@ -113,7 +139,13 @@ const loanSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// ✅ ЗАСВАРЛАСАН: next() устгасан - async function-д шаардлагагүй
+// ===== INDEXES =====
+loanSchema.index({ user: 1, status: 1 });
+loanSchema.index({ loanNumber: 1 });
+loanSchema.index({ dueDate: 1 });
+loanSchema.index({ status: 1, verificationPaid: 1 });
+
+// ===== PRE-SAVE HOOK =====
 loanSchema.pre('save', async function() {
   // Зээлийн дугаар байхгүй бол үүсгэх
   if (!this.loanNumber) {
@@ -122,10 +154,26 @@ loanSchema.pre('save', async function() {
   }
   
   // Нийт төлөх дүн тооцоолох (зөвхөн approvedAmount байвал)
-  if (this.approvedAmount > 0 && !this.totalRepayment) {
+  if (this.approvedAmount > 0 && !this.totalRepayment && !this.totalAmount) {
     this.totalRepayment = Math.round(this.approvedAmount * (1 + this.interestRate / 100));
+    this.totalAmount = this.totalRepayment; // ШИНЭ field
     this.remainingAmount = this.totalRepayment;
   }
 });
+
+// ===== VIRTUAL FIELDS =====
+
+// Зээл сунгах боломжтой эсэх
+loanSchema.virtual('isExtendable').get(function () {
+  // Зөвхөн 1 сар болон 3 сарын зээлийг сунгаж болно
+  return (
+    this.termDays !== 14 &&
+    ['disbursed', 'active', 'overdue'].includes(this.status)
+  );
+});
+
+// Ensure virtuals are included in JSON
+loanSchema.set('toJSON', { virtuals: true });
+loanSchema.set('toObject', { virtuals: true });
 
 module.exports = mongoose.model('Loan', loanSchema);
