@@ -553,6 +553,7 @@ exports.payLoan = async (req, res, next) => {
 // @desc    Зээл сунгах (10% төлөлттэй)
 // @route   POST /api/loans/:id/extend
 // @access  Private
+// ✅ ЗАСВАРЛАСАН: Зээл сунгах функц
 exports.extendLoan = async (req, res) => {
   try {
     const { id } = req.params;
@@ -598,8 +599,8 @@ exports.extendLoan = async (req, res) => {
       });
     }
 
-    // ✅ ШИНЭ ЛОГИК: 10% төлөлт
-    const tenPercentPayment = Math.round(loan.totalAmount * 0.1);
+    // ✅ ШИНЭ ЛОГИК: Үлдэгдэл зээлийн 10% төлөлт
+    const tenPercentPayment = Math.round(loan.remainingAmount * 0.1);
 
     // Хэтэвч шалгах
     const wallet = await Wallet.findOne({ user: userId });
@@ -616,11 +617,11 @@ exports.extendLoan = async (req, res) => {
     wallet.lastTransactionAt = new Date();
     await wallet.save();
 
-    // ✅ Үлдэгдэл дүн тооцох (10% хассан)
-    const newRemainingAmount = loan.remainingAmount - tenPercentPayment;
+    // ✅ 10% төлсний дараах үлдэгдэл дүн
+    const newRemainingAfterPayment = loan.remainingAmount - tenPercentPayment;
 
     // ✅ Шинэ хүү тооцох (үлдэгдэл дүн дээр)
-    const extensionInterest = Math.round(newRemainingAmount * (loan.interestRate / 100));
+    const newInterest = Math.round(newRemainingAfterPayment * (loan.interestRate / 100));
 
     // Сунгах хугацаа
     const extensionDays = loan.termDays || 30;
@@ -633,7 +634,7 @@ exports.extendLoan = async (req, res) => {
     loan.extensionCount = (loan.extensionCount || 0) + 1;
     loan.dueDate = newDueDate;
     loan.paidAmount += tenPercentPayment; // 10% төлсөн
-    loan.remainingAmount = newRemainingAmount + extensionInterest; // Үлдэгдэл + шинэ хүү
+    loan.remainingAmount = newRemainingAfterPayment + newInterest; // Үлдэгдэл + шинэ хүү
     loan.totalAmount = loan.paidAmount + loan.remainingAmount; // Нийт дүн шинэчлэх
     loan.totalRepayment = loan.totalAmount; // Compatibility
     loan.lastExtendedAt = new Date();
@@ -658,18 +659,7 @@ exports.extendLoan = async (req, res) => {
       processedAt: new Date()
     });
 
-    // ✅ Extension түүх (зөвхөн лог)
-    await Transaction.create({
-      user: userId,
-      type: 'loan_extension',
-      amount: extensionInterest,
-      status: 'completed',
-      description: `Зээл сунгалт (${extensionDays} хоног): ${loan.loanNumber}`,
-      loan: loan._id,
-      processedAt: new Date()
-    });
-
-    console.log(`✅ Зээл сунгагдлаа: ${loan.loanNumber}, 10% Payment: ${tenPercentPayment}, New Interest: ${extensionInterest}`);
+    console.log(`✅ Зээл сунгагдлаа: ${loan.loanNumber}, 10% Payment: ${tenPercentPayment}, New Interest: ${newInterest}`);
 
     res.json({
       success: true,
@@ -679,9 +669,10 @@ exports.extendLoan = async (req, res) => {
         extensionDetails: {
           extensionDays,
           tenPercentPayment,
-          extensionInterest,
+          newRemainingAfterPayment,
+          newInterest,
           newDueDate,
-          newRemainingAmount: loan.remainingAmount,
+          totalRemaining: loan.remainingAmount,
         },
       },
     });
@@ -693,7 +684,6 @@ exports.extendLoan = async (req, res) => {
     });
   }
 };
-
 // @desc    Бүх зээл (Admin)
 // @route   GET /api/loans/admin/all
 // @access  Private/Admin
