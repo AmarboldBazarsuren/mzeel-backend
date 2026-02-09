@@ -550,7 +550,7 @@ exports.payLoan = async (req, res, next) => {
 };
 
 // ===== ШИНЭ: Зээл сунгах функц =====
-// @desc    Зээл сунгах
+// @desc    Зээл сунгах (10% төлөлттэй)
 // @route   POST /api/loans/:id/extend
 // @access  Private
 exports.extendLoan = async (req, res) => {
@@ -590,32 +590,77 @@ exports.extendLoan = async (req, res) => {
       });
     }
 
-    // Сунгах хугацаа тооцох (анхны хугацаатай ижил)
+    // Сунгалтын тоо шалгах (max 5 удаа)
+    if ((loan.extensionCount || 0) >= 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'Зээл 5-аас илүү удаа сунгах боломжгүй'
+      });
+    }
+
+    // ✅ ШИНЭ ЛОГИК: 10% төлөлт
+    const tenPercentPayment = Math.round(loan.totalAmount * 0.1);
+
+    // Хэтэвч шалгах
+    const wallet = await Wallet.findOne({ user: userId });
+    if (!wallet || wallet.balance < tenPercentPayment) {
+      return res.status(400).json({
+        success: false,
+        message: `Хэтэвчний үлдэгдэл хүрэлцэхгүй. 10% төлбөр: ${tenPercentPayment}₮`
+      });
+    }
+
+    // ✅ 10% төлбөр хасах
+    wallet.balance -= tenPercentPayment;
+    wallet.totalSpent += tenPercentPayment;
+    wallet.lastTransactionAt = new Date();
+    await wallet.save();
+
+    // ✅ Үлдэгдэл дүн тооцох (10% хассан)
+    const newRemainingAmount = loan.remainingAmount - tenPercentPayment;
+
+    // ✅ Шинэ хүү тооцох (үлдэгдэл дүн дээр)
+    const extensionInterest = Math.round(newRemainingAmount * (loan.interestRate / 100));
+
+    // Сунгах хугацаа
     const extensionDays = loan.termDays || 30;
     
-    // Хүүгийн дүн тооцох (зөвхөн үндсэн дүн дээр)
-    const extensionInterest = Math.round(
-      loan.disbursedAmount * (loan.interestRate / 100)
-    );
-
-    // Шинэ дуусах хугацаа тооцох
+    // Шинэ дуусах хугацаа
     const newDueDate = new Date(loan.dueDate);
     newDueDate.setDate(newDueDate.getDate() + extensionDays);
 
-    // Loan-ийн мэдээлэл шинэчлэх
+    // ✅ Зээл шинэчлэх
     loan.extensionCount = (loan.extensionCount || 0) + 1;
     loan.dueDate = newDueDate;
-    loan.remainingAmount += extensionInterest;
-    loan.totalAmount = (loan.totalAmount || loan.totalRepayment) + extensionInterest;
+    loan.paidAmount += tenPercentPayment; // 10% төлсөн
+    loan.remainingAmount = newRemainingAmount + extensionInterest; // Үлдэгдэл + шинэ хүү
+    loan.totalAmount = loan.paidAmount + loan.remainingAmount; // Нийт дүн шинэчлэх
     loan.totalRepayment = loan.totalAmount; // Compatibility
     loan.lastExtendedAt = new Date();
 
+    if (loan.status === 'overdue') {
+      loan.status = 'active'; // Overdue-аас active болгох
+    }
+
     await loan.save();
 
-    // Extension түүх хадгалах
+    // ✅ 10% төлбөрийн transaction
     await Transaction.create({
       user: userId,
-      wallet: (await Wallet.findOne({ user: userId }))?._id,
+      wallet: wallet._id,
+      type: 'loan_payment',
+      amount: tenPercentPayment,
+      balanceBefore: wallet.balance + tenPercentPayment,
+      balanceAfter: wallet.balance,
+      status: 'completed',
+      description: `Зээл сунгалтын 10% төлбөр: ${loan.loanNumber}`,
+      loan: loan._id,
+      processedAt: new Date()
+    });
+
+    // ✅ Extension түүх (зөвхөн лог)
+    await Transaction.create({
+      user: userId,
       type: 'loan_extension',
       amount: extensionInterest,
       status: 'completed',
@@ -624,7 +669,7 @@ exports.extendLoan = async (req, res) => {
       processedAt: new Date()
     });
 
-    console.log(`✅ Зээл сунгагдлаа: ${loan.loanNumber}, Extension: ${extensionDays} days, Interest: ${extensionInterest}`);
+    console.log(`✅ Зээл сунгагдлаа: ${loan.loanNumber}, 10% Payment: ${tenPercentPayment}, New Interest: ${extensionInterest}`);
 
     res.json({
       success: true,
@@ -633,6 +678,7 @@ exports.extendLoan = async (req, res) => {
         loan,
         extensionDetails: {
           extensionDays,
+          tenPercentPayment,
           extensionInterest,
           newDueDate,
           newRemainingAmount: loan.remainingAmount,

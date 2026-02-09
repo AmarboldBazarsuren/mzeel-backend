@@ -10,11 +10,11 @@ const transactionSchema = new mongoose.Schema({
   wallet: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Wallet',
-    required: true
+    required: false // ✅ loan_extension-д wallet байхгүй
   },
   type: {
     type: String,
-    enum: ['deposit', 'withdrawal', 'loan_disbursement', 'loan_payment', 'verification_fee', 'refund'],
+    enum: ['deposit', 'withdrawal', 'loan_disbursement', 'loan_payment', 'verification_fee', 'refund', 'loan_extension'],
     required: true
   },
   amount: {
@@ -24,11 +24,11 @@ const transactionSchema = new mongoose.Schema({
   },
   balanceBefore: {
     type: Number,
-    required: true
+    required: false // ✅ loan_extension-д balanceBefore байхгүй
   },
   balanceAfter: {
     type: Number,
-    required: true
+    required: false // ✅ loan_extension-д balanceAfter байхгүй
   },
   status: {
     type: String,
