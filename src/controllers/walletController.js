@@ -7,22 +7,63 @@ const logger = require('../utils/logger');
 // @desc    Хэтэвчийн мэдээлэл авах
 // @route   GET /api/wallet
 // @access  Private
-exports.getWallet = async (req, res, next) => {
+exports.getWallet = async (req, res) => {
   try {
-    let wallet = await Wallet.findOne({ user: req.user.id });
+    const wallet = await Wallet.findOne({ user: req.user._id });
 
-    // Хэтэвч байхгүй бол үүсгэх
     if (!wallet) {
-      wallet = await Wallet.create({ user: req.user.id });
+      return res.json({
+        success: true,
+        data: {
+          wallet: {
+            user: req.user._id,
+            balance: 0,
+            totalDeposit: 0,
+            totalSpent: 0,
+          },
+        },
+      });
     }
 
-    successResponse(res, 200, 'Хэтэвчийн мэдээлэл', { wallet });
+    // ✅ ШИНЭ: Зөвхөн deposit transaction-уудын нийлбэр
+    const Transaction = require('../models/Transaction');
+    const depositTransactions = await Transaction.aggregate([
+      {
+        $match: {
+          user: req.user._id,
+          type: 'deposit',
+          status: 'completed',
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: '$amount' },
+        },
+      },
+    ]);
 
+    const actualTotalDeposit = depositTransactions.length > 0 
+      ? depositTransactions[0].total 
+      : 0;
+
+    res.json({
+      success: true,
+      data: { 
+        wallet: {
+          ...wallet.toObject(),
+          totalDeposit: actualTotalDeposit, // ✅ Зөвхөн deposit
+        }
+      },
+    });
   } catch (error) {
-    next(error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message,
+    });
   }
 };
-
 // @desc    QPay invoice үүсгэх (Deposit)
 // @route   POST /api/wallet/deposit
 // @access  Private

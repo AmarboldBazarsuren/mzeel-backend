@@ -20,10 +20,11 @@ const {
   getLoanDetails,
   approveLoan,
   rejectLoan,
-  // disburseLoan // ✅ УСТГАСАН
+  approveLoanDisbursement
 } = require('../controllers/loanController');
+// ✅ ЗАСВАРЛАСАН: withdrawalController-с зөв функцүүдийг import хийх
 const {
-  getPendingWithdrawals,
+  getAllWithdrawals,
   approveWithdrawal,
   rejectWithdrawal
 } = require('../controllers/withdrawalController');
@@ -56,10 +57,11 @@ router.get('/loans/:id', getLoanDetails);
 router.put('/loans/:id/start-review', startLoanReview);
 router.put('/loans/:id/approve', approveLoan);
 router.put('/loans/:id/reject', rejectLoan);
-// router.put('/loans/:id/disburse', disburseLoan); // ✅ УСТГАСАН
+router.put('/loans/:id/approve-disbursement', approveLoanDisbursement);
 
 // ===== WITHDRAWALS =====
-router.get('/withdrawals/pending', getPendingWithdrawals);
+// ✅ ЗАСВАРЛАСАН: getPendingWithdrawals -> getAllWithdrawals (query parameter-ээр шүүнэ)
+router.get('/withdrawals/pending', getAllWithdrawals); // status=pending гэж query parameter-ээр дамжуулна
 router.put('/withdrawals/:id/approve', approveWithdrawal);
 router.put('/withdrawals/:id/reject', rejectWithdrawal);
 
